@@ -203,17 +203,29 @@ it — a failure there must not block the other four VMs.
 - `stage0_coco.py` — needs COCO downloaded; `pycocotools` API calls unverified.
 - `stage1_edit.py` — FLUX Kontext is gated on HF; pipeline class name and
   offload behaviour unverified on this hardware.
-- `stage3_judge.py` — **the highest-risk file**, but less risky than it was.
-  Confirmed against the installed vllm 0.11.0 on a judge VM (2026-08-25):
-  `LLM.chat` accepts `list[list[message]]`, so batching a list of message-lists
-  is right; it takes `mm_processor_kwargs`; and **the `image_pil` content type
-  is real** — `vllm/entrypoints/chat_utils.py` defines the field and a
-  `parse_image_pil` handler. Still unverified: the exact content-part dict
-  shape (is the discriminator literally `"type": "image_pil"`?), whether
-  `chat_template_content_format="auto"` resolves to a format that keeps custom
-  content parts, `limit_mm_per_prompt`/`mm_processor_kwargs` on `LLM.__init__`
-  rather than `chat`, and the logprob structure that
-  `expected_score_from_logprobs` walks (`lp_dict[tok_id].decoded_token`).
+- `stage3_judge.py` — was the highest-risk file; most of that risk is now
+  retired. Verified against the installed vllm 0.11.0 on a judge VM
+  (2026-08-25), all without a GPU:
+  - `LLM.chat` accepts `list[list[message]]`, so batching message-lists is right.
+  - `MM_PARSER_MAP` in `vllm/entrypoints/chat_utils.py` contains an `"image_pil"`
+    entry, so `{"type": "image_pil", ...}` is the correct discriminator.
+  - `LLM.__init__` ends in `**kwargs: Any`, forwarded to `EngineArgs`. That is
+    how `max_model_len` and `limit_mm_per_prompt` reach the engine even though
+    neither is an explicit parameter — **don't "fix" that by deleting them.**
+    `mm_processor_kwargs`, `dtype` and `gpu_memory_utilization` are explicit.
+
+  Still open, and only a loaded model can answer:
+  - Whether `chat_template_content_format="auto"` resolves to a format that
+    preserves custom content parts for Qwen3-VL.
+  - The logprob structure `expected_score_from_logprobs` walks
+    (`lp_dict[tok_id].decoded_token`).
+
+  One annotation oddity to be aware of if images ever fail to attach:
+  `CustomChatCompletionContentPILImageParam` annotates `image_pil` as
+  `Optional[PILImage]` (a pydantic wrapper), but its own docstring example and
+  the `parse_image_pil` signature (`Optional[Image.Image]`) both say a raw PIL
+  image. We pass raw. TypedDict annotations are not enforced at runtime, so the
+  annotation is the outlier, not us.
 - `stage4_analyze.py` — logic is straightforward but has never seen real data.
 
 ## Open TODOs
