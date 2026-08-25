@@ -32,8 +32,42 @@ MAX_PIXELS = 1024 * 1024        # ~1300 vision tokens/image
 MIN_PIXELS = 256 * 256
 
 
-def load_engine(model: str, max_len: int = 8192, util: float = 0.90):
+# 0.85, not 0.90. vLLM budgets gpu_memory_utilization as a fraction of TOTAL
+# memory but refuses to start unless that much is FREE. The A10-24Q vGPU reports
+# 23.72GiB total and only ~21.34GiB free — roughly 2.4GiB is reserved by the
+# vGPU layer itself and never comes back — so 0.90 (21.35GiB) misses by 0.01GiB
+# and the engine dies before loading a single weight.
+#
+# All five VMs must use the SAME value. It sizes the KV cache, which changes
+# batch composition, which can perturb logits at the numerical margins. Scores
+# from differently-configured shards are not cleanly comparable.
+DEFAULT_GPU_UTIL = 0.85
+
+
+def load_engine(model: str, max_len: int = 8192, util: float = DEFAULT_GPU_UTIL):
     from vllm import LLM
+
+    # vLLM's own message for this reports the shortfall but not the fix, and it
+    # arrives after a model download. Check first and say what to pass.
+    try:
+        import torch
+        free, total = torch.cuda.mem_get_info()
+        need = total * util
+        print(f"GPU: {free / 2**30:.2f}GiB free of {total / 2**30:.2f}GiB; "
+              f"util={util} needs {need / 2**30:.2f}GiB")
+        if need > free:
+            headroom = (free / total) - 0.02
+            raise SystemExit(
+                f"gpu_memory_utilization={util} needs {need / 2**30:.2f}GiB but only "
+                f"{free / 2**30:.2f}GiB is free.\n"
+                f"Retry with --gpu-util {headroom:.2f} (or lower).\n"
+                f"If another process is on the GPU, check `nvidia-smi` first — "
+                f"otherwise this is the vGPU's own reservation and is permanent.\n"
+                f"Whatever you choose, every VM must use the same value."
+            )
+    except ImportError:
+        pass
+
     return LLM(
         model=model,
         dtype="bfloat16",
@@ -193,6 +227,9 @@ def main():
     ap.add_argument("--n-samples", type=int, default=5)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--limit", type=int, default=None, help="pilot mode: cap variants")
+    ap.add_argument("--gpu-util", type=float, default=DEFAULT_GPU_UTIL,
+                    help=f"gpu_memory_utilization (default {DEFAULT_GPU_UTIL}); "
+                         "all five VMs must pass the same value")
     ap.add_argument("--dry-run", action="store_true",
                     help="build the requests and print the first one, without "
                          "importing vLLM — runs on a machine with no GPU")
@@ -211,7 +248,7 @@ def main():
     msgs, meta = build_requests(df, Path(a.bases), Path(a.variants))
     print(f"{len(msgs)} requests x n={a.n_samples}")
 
-    llm = load_engine(a.model)
+    llm = load_engine(a.model, util=a.gpu_util)
     res = run(llm, msgs, meta, a.n_samples, a.temperature)
     res["judge"] = a.model
 

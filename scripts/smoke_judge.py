@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.judge_prompt import (  # noqa: E402
     build_prompt, parse_scores, expected_score_from_logprobs,
 )
-from src.stage3_judge import load_engine  # noqa: E402
+from src.stage3_judge import load_engine, DEFAULT_GPU_UTIL  # noqa: E402
 
 
 def _pair() -> tuple[Image.Image, Image.Image]:
@@ -58,6 +58,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3-VL-8B-Instruct")
     ap.add_argument("--n-samples", type=int, default=2)
+    ap.add_argument("--gpu-util", type=float, default=DEFAULT_GPU_UTIL,
+                    help=f"gpu_memory_utilization (default {DEFAULT_GPU_UTIL})")
     a = ap.parse_args()
 
     from vllm import SamplingParams
@@ -70,7 +72,7 @@ def main() -> int:
         {"type": "text", "text": prompt},
     ]}]]
 
-    llm = load_engine(a.model)
+    llm = load_engine(a.model, util=a.gpu_util)
     sp = SamplingParams(n=a.n_samples, temperature=0.7, top_p=0.95,
                         max_tokens=32, logprobs=20, seed=1234)
     outs = llm.chat(msgs, sp)

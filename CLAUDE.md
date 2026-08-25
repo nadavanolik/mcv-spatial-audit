@@ -80,6 +80,7 @@ Consequences, all already reflected in the code:
 | Constraint | Consequence |
 |---|---|
 | A10 = SM 8.6 (Ampere) | **bf16 only. Never fp8** — those kernels need SM 8.9+. The official Qwen FP8 checkpoint is not usable here. |
+| `A10-24Q` reserves ~2.4GiB | Only **21.34 of 23.72GiB is free** at startup. vLLM budgets `gpu_memory_utilization` against *total* but demands that much *free*, so 0.90 misses by 0.01GiB and the engine dies before loading a weight. `DEFAULT_GPU_UTIL = 0.85`. |
 | No shared FS | Corrupted variants are **regenerated per-VM**, never transferred. Only ~300MB of base edits moves, once, via HF Hub. |
 | No sudo | `opencv-python-headless` — the normal build needs `libGL.so.1` via apt. Never swap this. |
 | 90G disk | VMs are **role-specialised**: the editor VM holds the diffusion model, judge VMs hold judges. Never both. |
