@@ -249,13 +249,48 @@ it — a failure there must not block the other four VMs.
   `stage3_judge.py` is verified as far as synthetic data can take it.
 - `stage4_analyze.py` — logic is straightforward but has never seen real data.
 
+## BLOCKER — the judge shows no image sensitivity yet
+
+`smoke_judge.py` on 2026-08-25, Qwen3-VL-8B, **placeholder prompt**:
+
+| request | images | SC (expected) |
+|---|---|---|
+| A followed | source + genuinely edited | 4.9991 |
+| B ignored | source + unchanged copy | 4.9437 |
+| **C text-only** | **none at all** | **5.0000** |
+
+A − B = **+0.055**. The images are definitely in the prompt (+396 tokens vs C).
+But a request with **no images scores 5.0**, so the number is a function of the
+prompt, not the pixels.
+
+**Do not generate data until this gap is real.** Every analysis in the report —
+AUROC, the leakage matrix, redundancy — is computed on ∆score. If ∆score is
+noise, all four analyses return noise, and 17,600 requests per profile buys
+nothing. This is cheap to keep re-testing and ruinous to discover afterwards.
+
+What this is *not* yet: a finding. The prompt is the invented placeholder, so
+this says nothing about the published protocol. A degenerate judge is one of the
+outcomes the audit exists to detect, but claiming it requires the real prompt.
+
+Order to work through it:
+1. **Get the real SFReward prompt in** (TODO 1 below). Now on the critical path,
+   not a nicety — until it is in, we cannot tell a degenerate judge from a
+   degenerate prompt of our own making.
+2. Run `smoke_judge` again. Section 2b probes the vision path with a plain
+   question ("what colour is the square?"). If it answers correctly, the model
+   sees fine and the scoring prompt is the problem; if not, look at the harness.
+3. Only when A − B is clearly positive, run the `pilot` profile end to end and
+   look at the score histogram before scaling to `main`.
+
 ## Open TODOs
 
 1. **`src/judge_prompt.py` contains a PLACEHOLDER prompt.** Right shape,
    invented wording. It must be replaced verbatim from SpatialFlow-GRPO's
    appendix (arXiv:2606.26872) before any reportable run. The project's claim is
    that it audits *the published protocol*; an invented prompt voids the
-   comparison. This is isolated to one file on purpose.
+   comparison. This is isolated to one file on purpose. **See the BLOCKER above
+   — this is no longer just a fidelity issue, it gates knowing whether there is
+   any signal at all.**
 2. Pick and wire the second judge family (cross-family agreement is a finding).
 3. Nuisance and exploitability tests are designed but not implemented — they
    reuse the stage 3 harness with varied presentation (box/mask/crop, prompt

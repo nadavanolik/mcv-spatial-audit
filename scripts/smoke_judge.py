@@ -122,6 +122,11 @@ def main() -> int:
         sc = [s.get("SC") for s in sampled]
         print(f"  {lbl:<28} SC sampled={sc}  SC expected={exp.get('SC')}")
 
+    c_sc = expected_score_from_logprobs(C.outputs[0]).get("SC")
+    if c_sc is not None and c_sc >= 4.5:
+        print(f"\n  NOTE: the text-only request scored SC={c_sc:.3f} with NO IMAGES.")
+        print("  Whatever the score is measuring, it is not the pixels.")
+
     a_sc = expected_score_from_logprobs(A.outputs[0]).get("SC")
     b_sc = expected_score_from_logprobs(B.outputs[0]).get("SC")
     if a_sc is not None and b_sc is not None:
@@ -134,6 +139,25 @@ def main() -> int:
             print("  this gap is real — fix it before generating any data.")
         else:
             print("  OK: the judge separates an obeyed instruction from an ignored one.")
+
+    print("\n" + "=" * 66)
+    print("2b. CAN THE MODEL SEE AT ALL?  (only if 2 failed)")
+    print("=" * 66)
+    print("  Same images, but a plain question instead of the scoring prompt.")
+    print("  If these answers are correct, the vision path is fine and the")
+    print("  scoring PROMPT is what is degenerate — a very different problem")
+    print("  from the model being unable to use the images.")
+    probe = ("Look at the SECOND image. What colour is the large square in the "
+             "upper-left area? Answer with one word.")
+    psp = SamplingParams(n=1, temperature=0.0, max_tokens=8)
+    pouts = llm.chat([_msg(probe, src, edit), _msg(probe, src, src)], psp)
+    print(f"\n  second image is the RED edit  -> {pouts[0].outputs[0].text.strip()!r}"
+          "   (expect: red)")
+    print(f"  second image is the BLUE copy -> {pouts[1].outputs[0].text.strip()!r}"
+          "   (expect: blue)")
+    sees = ("red" in pouts[0].outputs[0].text.lower()
+            and "blue" in pouts[1].outputs[0].text.lower())
+    print(f"\n  vision path: {'WORKS — the scoring prompt is the problem' if sees else 'SUSPECT — the model is not using the images'}")
 
     print("\n" + "=" * 66)
     print("3. LOGPROB STRUCTURE AND THE CONTINUOUS READOUT")
