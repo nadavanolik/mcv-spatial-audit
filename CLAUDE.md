@@ -46,6 +46,18 @@ run over SSH and wait for the user to paste the output back. Never report a GPU
 stage as verified on the strength of a local run, and never add code whose only
 validation path is running it locally.
 
+`stage3_judge.py --dry-run` exists for this split: it runs `preflight()` over the
+shard, builds every chat message, prints the first one and the engine/sampling
+config it *would* use, and returns without importing vLLM or torch. Use it to
+settle manifest plumbing and message construction on the laptop, so an SSH
+session is only ever debugging the vLLM API surface itself. It needs stage-1
+bases and stage-2 variants on disk; with them missing it prints an inventory of
+what it could not find and exits 1.
+
+Anything that runs on both sides must stay OS-portable — no `os.statvfs`, no
+POSIX-only paths, and printed strings stay ASCII (the Windows console is not
+UTF-8; an em-dash in a `print` mojibakes).
+
 Local env: `.venv/`, Python **3.12** — the pinned `numpy==1.26.4` and
 `opencv-python-headless==4.10.0.84` have no 3.13 wheels. Invoke it explicitly
 (`./.venv/Scripts/python.exe tests/test_determinism.py`).
@@ -149,6 +161,13 @@ config.yaml             pilot / main / full_cross profiles
 - Repo layout was flattened in the scaffold commit and restored to the
   documented `src/` / `tests/` / `scripts/` tree on 2026-08-25 — the relative
   imports (`from .schema import ...`) and both shell scripts require it.
+- `stage2_corrupt.py` — ran end-to-end on the laptop (2026-08-25) against a
+  synthetic 3-base fixture: 81/81 variants rendered. Its free-space guard used
+  `os.statvfs`, which does not exist on Windows; now `shutil.disk_usage`.
+- `stage3_judge.py` **up to but not including the engine** — `--dry-run` built
+  all 243 requests from that fixture with `vllm` and `torch` confirmed absent
+  from `sys.modules`. This exercises manifest → shard → regions.json → prompt →
+  message assembly. It says nothing about whether vLLM accepts those messages.
 
 **Never executed — expect real bugs here:**
 - `stage0_coco.py` — needs COCO downloaded; `pycocotools` API calls unverified.

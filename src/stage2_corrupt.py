@@ -13,7 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
+import shutil
 from pathlib import Path
 
 import cv2
@@ -83,8 +83,9 @@ def main():
 
     # /dev/shm competes with the vLLM KV cache for RAM. 440GB total means this
     # is not tight, but check anyway so a full tmpfs fails loudly and early.
-    st = os.statvfs(out)
-    free_gb = st.f_bavail * st.f_frsize / 1e9
+    # shutil, not os.statvfs: the latter is POSIX-only and this module is also
+    # run on the Windows laptop for CPU-side checks.
+    free_gb = shutil.disk_usage(out).free / 1e9
     print(f"{out}: {free_gb:.0f}GB free")
     if free_gb < 10:
         raise SystemExit("under 10GB free in scratch — refusing to start")

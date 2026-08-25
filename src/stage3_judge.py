@@ -24,6 +24,7 @@ import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 
+from . import judge_prompt
 from .judge_prompt import build_prompt, parse_scores, expected_score_from_logprobs
 from .schema import shard
 
@@ -94,24 +95,118 @@ def run(llm, msgs, meta, n_samples: int, temperature: float) -> pd.DataFrame:
     return pd.DataFrame(recs)
 
 
+def preflight(rows: pd.DataFrame, bases: Path, variants: Path) -> dict:
+    """Stat every file build_requests will open, without decoding any of them.
+
+    Cheap enough to run over a whole shard, and it turns the usual
+    "FileNotFoundError on request 4,812, twenty minutes in" into an inventory
+    you can read before anything loads.
+    """
+    missing: dict[str, list[str]] = {"regions.json": [], "source.png": [], "variant": []}
+    seen: set[str] = set()
+    for row in rows.itertuples():
+        b = bases / row.base_id
+        if row.base_id not in seen:
+            seen.add(row.base_id)
+            for f in ("regions.json", "source.png"):
+                if not (b / f).exists():
+                    missing[f].append(str(b / f))
+        v = variants / f"{row.variant_id}.png"
+        if not v.exists():
+            missing["variant"].append(str(v))
+    return {"n_bases": len(seen), "missing": missing}
+
+
+def describe_message(msg: list) -> str:
+    """Render one chat message for reading: images summarised to mode/size,
+    prompt text shown in full — the prompt is the thing worth eyeballing."""
+    lines = []
+    for c in msg[0]["content"]:
+        if c["type"] == "image_pil":
+            im = c["image_pil"]
+            lines.append(f'  {{"type": "image_pil", "image_pil": '
+                         f'<PIL.Image {im.mode} {im.width}x{im.height}>}},')
+        else:
+            lines.append(f'  {{"type": "{c["type"]}", "text": """')
+            lines.extend("    " + ln for ln in c["text"].splitlines())
+            lines.append('  """}},')
+    return "\n".join(lines)
+
+
+def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
+    """Build the requests and print the first one. Never imports vLLM.
+
+    This exists so message construction and manifest plumbing can be checked on
+    a machine with no GPU, leaving only the vLLM API surface itself to be
+    debugged on a judge VM.
+    """
+    print("=== DRY RUN: building requests only, vLLM is never imported ===")
+
+    pf = preflight(rows, bases, variants)
+    n_missing = sum(len(v) for v in pf["missing"].values())
+    print(f"{len(rows)} variants across {pf['n_bases']} bases")
+    if n_missing:
+        print(f"\nMISSING INPUTS ({n_missing} paths):")
+        for kind, paths in pf["missing"].items():
+            if paths:
+                print(f"  {kind}: {len(paths)} missing, e.g. {paths[0]}")
+        print("\nCannot build requests. Run stage 1 (base edits) and stage 2 "
+              "(variants) first, or point --bases/--variants elsewhere.")
+        return 1
+
+    msgs, meta = build_requests(rows, bases, variants)
+    per_variant = len(msgs) / max(len(rows), 1)
+    print(f"{len(msgs)} requests ({per_variant:.2f} regions/variant) "
+          f"x n={a.n_samples} = {len(msgs) * a.n_samples} generations")
+
+    print("\n--- first request ---")
+    print(f"meta: {meta[0]}")
+    print('messages[0] = [{"role": "user", "content": [')
+    print(describe_message(msgs[0]))
+    print("]}]")
+
+    print("\n--- sampling params that would be used (not constructed) ---")
+    print(f"  n={a.n_samples} temperature={a.temperature} top_p=0.95 "
+          f"max_tokens=32 logprobs=20 seed=1234")
+    print("\n--- engine that would be loaded (not loaded) ---")
+    print(f"  model={a.model} dtype=bfloat16 max_model_len=8192 "
+          f"gpu_memory_utilization=0.90")
+    print(f"  mm_processor_kwargs={{'max_pixels': {MAX_PIXELS}, "
+          f"'min_pixels': {MIN_PIXELS}}}")
+
+    if "PLACEHOLDER" in (judge_prompt.__doc__ or ""):
+        # ASCII only: this runs on a Windows console, which is not UTF-8.
+        print("\nNOTE: src/judge_prompt.py still ships the PLACEHOLDER prompt. "
+              "The text above is not SpatialFlow-GRPO's published wording.")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--bases", required=True)
     ap.add_argument("--variants", default="/dev/shm/mcv/variants")
     ap.add_argument("--model", default="Qwen/Qwen3-VL-8B-Instruct")
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", help="output parquet; required unless --dry-run")
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--of", type=int, default=1)
     ap.add_argument("--n-samples", type=int, default=5)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--limit", type=int, default=None, help="pilot mode: cap variants")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="build the requests and print the first one, without "
+                         "importing vLLM — runs on a machine with no GPU")
     a = ap.parse_args()
 
     df = shard(pd.read_parquet(a.manifest), a.shard, a.of)
     if a.limit:
         df = df.head(a.limit)
     print(f"judging {len(df)} variants with {a.model}")
+
+    if a.dry_run:
+        raise SystemExit(dry_run(df, Path(a.bases), Path(a.variants), a))
+    if not a.out:
+        ap.error("--out is required unless --dry-run is given")
 
     msgs, meta = build_requests(df, Path(a.bases), Path(a.variants))
     print(f"{len(msgs)} requests x n={a.n_samples}")
