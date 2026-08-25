@@ -1,0 +1,46 @@
+# Design matrix profiles.
+#
+# ARITHMETIC WARNING — check this before you commit to a profile:
+# requests = n_bases x regions_per_base(~4) x variants_per_region x regions_scored(~4)
+# samples  = requests x n_samples
+#
+# The proposal budgeted ~1,000 variants / 10-20k calls. A full cross of
+# 200 bases x 6 corruptions x 3 severities x 2 areas is 24,800 variants and
+# 99,200 requests — 5x over budget, ~6.6h per VM even sharded five ways.
+# Do not run it by accident. `main` below is sized to the proposal.
+
+pilot:
+  n_bases: 5
+  corruptions: [none, blur]
+  severities: [1, 3]
+  area_bins: [full]
+  # 60 variants -> ~240 requests. Runs in minutes. Validates the judge.
+
+main:
+  n_bases: 100
+  corruptions: [none, blur, saturate, noise, jpeg, remove]
+  severities: [1, 3]          # skip mid severity; keeps the effect-size ladder
+  area_bins: [full]
+  # 4,400 variants -> ~17,600 requests -> ~3,520/VM -> ~1.2h/VM. On budget.
+
+full_cross:
+  n_bases: 200
+  corruptions: [none, blur, saturate, noise, jpeg, remove]
+  severities: [1, 2, 3]
+  area_bins: [full, half]
+  # 24,800 variants -> 99,200 requests -> ~6.6h/VM. Only if `main` finishes early.
+
+selection:
+  min_regions: 3
+  max_regions: 5
+  min_area_frac: 0.02
+  max_area_frac: 0.25
+
+judges:
+  - Qwen/Qwen3-VL-8B-Instruct
+  # second family — cross-family agreement is itself a finding
+  # - OpenGVLab/InternVL3-8B
+
+sampling:
+  n_samples: 5        # vLLM n=, shares the prefill across samples
+  temperature: 0.7
