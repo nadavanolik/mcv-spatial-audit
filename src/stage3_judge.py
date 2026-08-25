@@ -25,7 +25,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from . import judge_prompt
-from .judge_prompt import build_prompt, parse_scores, expected_score_from_logprobs
+from .judge_prompt import build_sc_prompt, build_pq_prompt, parse_sc, parse_pq, region_reward
 from .schema import shard
 
 # 768^2 = 589,824. Chosen to be a no-op on our actual data while shrinking the
@@ -102,26 +102,43 @@ def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL)
 
 
 def build_requests(rows: pd.DataFrame, bases: Path, variants: Path) -> tuple[list, list]:
-    """One request per (variant, region). Note we score EVERY region of the
-    image, not just the corrupted one — leakage into neighbours is the finding."""
+    """Two requests per variant, following A.4.3 / A.4.4:
+
+      SC  source + edited, scoring EVERY region at once (plus background and
+          overall) in one structured response.
+      PQ  the edited image alone, giving the image-level [naturalness,
+          artifacts] that Equation (3) needs.
+
+    This is the protocol's own shape, not ours. The published prompt hands the
+    judge all regions together and asks it to score them separately, so
+    cross-region leakage shows up the way the paper's judge would exhibit it
+    rather than as an artefact of how we sliced requests. It also happens to be
+    cheaper: 2 requests per variant instead of one per region.
+    """
     msgs, meta = [], []
     for row in rows.itertuples():
         regions = json.loads((bases / row.base_id / "regions.json").read_text())
         src = Image.open(bases / row.base_id / "source.png").convert("RGB")
         edit = Image.open(variants / f"{row.variant_id}.png").convert("RGB")
 
-        for r in regions:
-            prompt = build_prompt(row.instruction, r["label"], r["bbox"])
-            msgs.append([{"role": "user", "content": [
-                {"type": "image_pil", "image_pil": src},
-                {"type": "image_pil", "image_pil": edit},
-                {"type": "text", "text": prompt},
-            ]}])
-            meta.append(dict(variant_id=row.variant_id, base_id=row.base_id,
-                             scored_region_id=r["region_id"],
-                             target_region_id=row.target_region_id,
-                             corruption=row.corruption, severity=row.severity,
-                             area_bin=row.area_bin, is_control=row.is_control))
+        common = dict(variant_id=row.variant_id, base_id=row.base_id,
+                      target_region_id=row.target_region_id,
+                      corruption=row.corruption, severity=row.severity,
+                      area_bin=row.area_bin, is_control=row.is_control,
+                      region_ids=[r["region_id"] for r in regions])
+
+        msgs.append([{"role": "user", "content": [
+            {"type": "image_pil", "image_pil": src},
+            {"type": "image_pil", "image_pil": edit},
+            {"type": "text", "text": build_sc_prompt(row.instruction, regions)},
+        ]}])
+        meta.append({**common, "kind": "sc"})
+
+        msgs.append([{"role": "user", "content": [
+            {"type": "image_pil", "image_pil": edit},
+            {"type": "text", "text": build_pq_prompt()},
+        ]}])
+        meta.append({**common, "kind": "pq"})
     return msgs, meta
 
 
@@ -129,25 +146,48 @@ def run(llm, msgs, meta, n_samples: int, temperature: float) -> pd.DataFrame:
     from vllm import SamplingParams
 
     # n=n_samples shares the prefill across all samples. With images, prefill
-    # is nearly the entire cost (outputs are ~15 tokens), so this is close to
-    # a free 4-5x versus issuing n_samples separate requests.
+    # dominates, so this is close to a free 4-5x versus n separate requests.
+    #
+    # max_tokens is 1024, not 32: A.4.3 asks for per-region `reasoning` strings
+    # before the scores, so a multi-region response is hundreds of tokens. At 32
+    # every response truncates mid-reasoning and parses as nothing.
     sp = SamplingParams(
         n=n_samples, temperature=temperature, top_p=0.95,
-        max_tokens=32, logprobs=20, seed=1234,
+        max_tokens=1024, seed=1234,
     )
     outs = llm.chat(msgs, sp)
 
-    recs = []
+    # SC first: one row per (variant, sample, region), plus a background row.
+    # PQ is image-level and merged on afterwards.
+    recs, pq_by_key = [], {}
     for m, o in zip(meta, outs):
+        if m["kind"] != "pq":
+            continue
         for i, cand in enumerate(o.outputs):
-            sampled = parse_scores(cand.text)
-            expected = expected_score_from_logprobs(cand)
-            recs.append({**m, "sample_idx": i,
-                         "sc_sampled": sampled.get("SC"),
-                         "pq_sampled": sampled.get("PQ"),
-                         "sc_expected": expected.get("SC"),
-                         "pq_expected": expected.get("PQ"),
-                         "raw": cand.text})
+            pq_by_key[(m["variant_id"], i)] = parse_pq(cand.text)
+
+    for m, o in zip(meta, outs):
+        if m["kind"] != "sc":
+            continue
+        base = {k: v for k, v in m.items() if k not in ("kind", "region_ids")}
+        for i, cand in enumerate(o.outputs):
+            sc = parse_sc(cand.text)
+            pq = pq_by_key.get((m["variant_id"], i))
+            for rid in list(m["region_ids"]) + ["bg"]:
+                pair = None if rid == "bg" else sc.get("regions", {}).get(rid)
+                recs.append({
+                    **base, "sample_idx": i, "scored_region_id": rid,
+                    "sc_success": pair[0] if pair else None,
+                    "sc_preserve": pair[1] if pair else None,
+                    "sc_background": sc.get("background"),
+                    "sc_overall_success": (sc.get("overall") or [None, None])[0],
+                    "sc_overall_preserve": (sc.get("overall") or [None, None])[1],
+                    "pq_naturalness": pq[0] if pq else None,
+                    "pq_artifacts": pq[1] if pq else None,
+                    "reward": region_reward(sc, rid, pq),
+                    "parsed": bool(sc),
+                    "raw": cand.text,
+                })
     return pd.DataFrame(recs)
 
 
@@ -212,7 +252,7 @@ def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
 
     msgs, meta = build_requests(rows, bases, variants)
     per_variant = len(msgs) / max(len(rows), 1)
-    print(f"{len(msgs)} requests ({per_variant:.2f} regions/variant) "
+    print(f"{len(msgs)} requests ({per_variant:.2f} per variant: 1 SC + 1 PQ) "
           f"x n={a.n_samples} = {len(msgs) * a.n_samples} generations")
 
     print("\n--- first request ---")
@@ -278,11 +318,11 @@ def main():
     res.to_parquet(a.out)
 
     # Fail loudly on a degenerate judge rather than discovering it in analysis.
-    ok = res.sc_sampled.notna().mean()
+    ok = res.parsed.mean() if len(res) else 0.0
     print(f"parse rate: {ok:.1%}")
     if ok < 0.95:
         print("WARNING: low parse rate — fix the prompt before scaling up")
-    print(res.sc_sampled.value_counts(dropna=False).sort_index())
+    print(res.reward.describe())
 
 
 if __name__ == "__main__":

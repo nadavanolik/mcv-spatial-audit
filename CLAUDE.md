@@ -129,11 +129,19 @@ Consequences, all already reflected in the code:
    this is a near-free 4-5x versus k separate requests. Also cap `max_pixels` —
    Qwen3-VL tokenizes by area and an uncapped 2000px image explodes latency.
 
-6. **Two score readouts.** `sc_sampled` (the integer the judge emitted) and
-   `sc_expected` (Σ p(k)·k over digit-token logprobs). The integer scale makes
-   ∆score granularity 1, which produces massive ties and a degenerate AUROC.
-   The logprob expectation is continuous and lower-variance. Report both;
-   the comparison between them is itself a result.
+6. **Two score readouts — HALF BROKEN, needs a design pass.** The plan was
+   `sc_sampled` (the emitted integer) plus `sc_expected` (Σ p(k)·k over
+   digit-token logprobs), because a 1-5 integer gives ∆score granularity 1 and
+   a tie-ridden, degenerate AUROC.
+   The real A.4.3 protocol changes the premise: scores are **two-digit numbers
+   on 0-25**, nested in a list, inside a per-region object, after a
+   variable-length free-text `reasoning` field. The old readout located a score
+   by regex on a running prefix and summed over single digit tokens; none of
+   that survives. `expected_score_from_logprobs` now **raises
+   NotImplementedError** rather than silently returning wrong numbers.
+   Mitigating factor: 0-25 is a 26-point scale, so the tie problem that
+   motivated the continuous readout is far less severe than it was on 1-5.
+   Decide whether it is still needed before rebuilding it.
 
 ## Repo layout
 
@@ -284,13 +292,39 @@ Order to work through it:
 
 ## Open TODOs
 
-1. **`src/judge_prompt.py` contains a PLACEHOLDER prompt.** Right shape,
-   invented wording. It must be replaced verbatim from SpatialFlow-GRPO's
-   appendix (arXiv:2606.26872) before any reportable run. The project's claim is
-   that it audits *the published protocol*; an invented prompt voids the
-   comparison. This is isolated to one file on purpose. **See the BLOCKER above
-   — this is no longer just a fidelity issue, it gates knowing whether there is
-   any signal at all.**
+1. ~~Placeholder prompt~~ **DONE (2026-08-25).** `src/judge_prompt.py` now
+   carries A.4.3 verbatim from arXiv:2606.26872. Three caveats to state in the
+   report rather than bury:
+   - **The PQ prompt is reconstructed, not verbatim.** The paper shows
+     SFReward's PQ *output* (A.4.4) but never its PQ *prompt*; A.5.2's PQ prompt
+     is the MultiEditBench/VIEScore one on 0-10 for GPT-4.1, a different
+     purpose. Ours matches A.4.4's output shape. Marked in the file.
+   - **How the instruction and region list are appended is ours.** A.4.3 says
+     only "You will be provided with pre-identified editing regions" and never
+     shows the injection format.
+   - **SFReward is a fine-tuned model** (Qwen3-VL-8B + SFReward-14K); A.4.3 is
+     the prompt that labelled that data with a Gemini-3-Pro teacher. We apply it
+     to *base* Qwen3-VL-8B, so we audit the prompt-based protocol, not the
+     released reward model.
+
+   Consequences already implemented: scale is **0-25, not 1-5**; requests are
+   **2 per variant** (one SC scoring every region at once, one image-level PQ)
+   rather than one per region — which is the protocol's own shape and cheaper
+   than what we had; `max_tokens` 32 -> 1024, since A.4.3 demands per-region
+   `reasoning` before the scores; COCO `(x,y,w,h)` is converted to A.4.3's
+   `bbox_2d [x1,y1,x2,y2]`.
+
+   **A finding that falls straight out of reading Equation (3):** the region
+   reward is √(φ(IF_{i,r}) · AES_i)/C where AES_i = min(PQ) is a *single
+   image-level* term multiplying every region of that image. Part of each
+   "region" reward is global by construction, before any judge behaviour is
+   measured. Within one image it cancels from region-to-region comparisons;
+   across variants it does not. Worth a paragraph in the report.
+
+1b. **`stage4_analyze.py` still expects the old columns.** stage 3 now emits
+   `sc_success`, `sc_preserve`, `sc_background`, `sc_overall_*`, `pq_*`,
+   `reward`, `parsed` — not `sc_sampled`/`sc_expected`. Migrate before running
+   any analysis.
 2. Pick and wire the second judge family (cross-family agreement is a finding).
 3. Nuisance and exploitability tests are designed but not implemented — they
    reuse the stage 3 harness with varied presentation (box/mask/crop, prompt
