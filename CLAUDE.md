@@ -192,6 +192,12 @@ it — a failure there must not block the other four VMs.
   total matched), and then on VM `mcvgpu2025s-0050` (2026-08-25), which printed
   `776feeddd281fa726195bf504c7b19c8` — the pre-bump container reference —
   while running 4.11.0.86. The bump forced by vLLM re-baselines nothing.
+- **Cross-VM agreement is confirmed, not assumed** (2026-08-25). Two
+  independent VMs — `mcvgpu2025s-0050` and `mcvgpu2025s-0043` — both print
+  `776feeddd281fa726195bf504c7b19c8` on `numpy 1.26.4 / cv2 4.11.0 /
+  pillow 10.4.0`, matching the reference container. This is the invariant the
+  whole five-way shard split rests on and it had never been tested before now.
+  The remaining three VMs must reproduce it as they come online.
 - **The laptop's hash differs for platform reasons only, as suspected.** Linux
   gives `776feedd…`; Windows gives `5073799d…` on identical pins. Both are
   internally stable. Compare VM hashes to `776feedd…`; never to the laptop's.
