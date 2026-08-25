@@ -100,6 +100,13 @@ Consequences, all already reflected in the code:
    - `numpy`, `opencv-python-headless`, `Pillow` are **version-pinned** in
      `requirements.txt` for this reason. If you must bump one, re-run
      `scripts/verify_determinism.sh` on two machines and compare hashes first.
+   - The OpenCV pin is **coupled to vLLM**: vllm 0.11.0 requires
+     `opencv-python-headless>=4.11.0`, so the judge VMs cannot install an older
+     one. The pin is `==4.11.0.86` — the floor, exactly pinned. Never relax it
+     to a range to end a resolver fight: a range lets two VMs land on different
+     builds, which is precisely the failure determinism exists to prevent.
+     If a future vLLM raises the floor again, bump to the new floor exactly and
+     re-run the equivalence check below before accepting it.
    - `tests/test_determinism.py` guards repeatability, seed-sensitivity, order
      independence, spatial locality, and monotone area bins. Keep it passing.
 
@@ -175,6 +182,12 @@ it — a failure there must not block the other four VMs.
 - Repo layout was flattened in the scaffold commit and restored to the
   documented `src/` / `tests/` / `scripts/` tree on 2026-08-25 — the relative
   imports (`from .schema import ...`) and both shell scripts require it.
+- **OpenCV 4.10.0.84 -> 4.11.0.86 is byte-equivalent** for our corruptions
+  (2026-08-25, laptop). The fixture was rendered under both, with `numpy` and
+  `Pillow` held identical and only `cv2` swapped: all five per-corruption
+  hashes and the total matched exactly. That is why the bump forced by vLLM did
+  not re-baseline the audit. Verified on Windows only — a Linux VM agreeing
+  with `776feeddd281fa726195bf504c7b19c8` post-bump closes the loop.
 - `stage2_corrupt.py` — ran end-to-end on the laptop (2026-08-25) against a
   synthetic 3-base fixture: 81/81 variants rendered. Its free-space guard used
   `os.statvfs`, which does not exist on Windows; now `shutil.disk_usage`.

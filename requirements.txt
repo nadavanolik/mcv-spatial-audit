@@ -13,7 +13,16 @@
 # Each of those pulls this file in, so install one command, not two.
 
 numpy==1.26.4
-opencv-python-headless==4.10.0.84   # headless: GUI build needs libGL.so.1 -> apt -> root. We have no root.
+# headless: the GUI build needs libGL.so.1 -> apt -> root. We have no root.
+#
+# 4.11.0.86, not 4.10.0.84: vllm 0.11.0 requires opencv-python-headless>=4.11.0,
+# and 4.10 made the judge VM impossible to install. Before bumping, the fixture
+# was rendered under both versions with numpy and Pillow held identical: all
+# five corruptions and the total hash came out byte-identical
+# (5073799d8511586afc2dc504b330abea under each). So this bump does not
+# re-baseline anything. Still an exact pin, not >=4.11.0 — a range lets two VMs
+# resolve to different builds, which is exactly what determinism forbids.
+opencv-python-headless==4.11.0.86
 Pillow==10.4.0
 pandas==2.2.2
 pyarrow==17.0.0
