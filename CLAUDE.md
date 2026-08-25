@@ -257,59 +257,38 @@ it — a failure there must not block the other four VMs.
   `stage3_judge.py` is verified as far as synthetic data can take it.
 - `stage4_analyze.py` — logic is straightforward but has never seen real data.
 
-## BLOCKER (cause found, fix landed, awaiting re-test)
+## Judge sanity — RESOLVED 2026-08-25
 
-**Status 2026-08-25:** the vision path is confirmed working and the placeholder
-prompt was the cause. The real A.4.3 prompt is now in. Re-run `smoke_judge` to
-confirm the gap appears; until it does, do not generate data.
+The placeholder prompt was the entire problem. With A.4.3 in, on synthetic
+squares, Qwen3-VL-8B separates an obeyed instruction from an ignored one by the
+full width of the scale:
 
-The diagnostic that settled it — same images, plain question instead of the
-scoring prompt, temperature 0:
+| | region 0 phi | region 1 phi | bg |
+|---|---|---|---|
+| instruction obeyed | **25.0** | 0.0 | 25.0 |
+| instruction ignored | **0.0** | 0.0 | 25.0 |
 
-```
-second image is the RED edit  -> 'red'    (correct)
-second image is the BLUE copy -> 'blue'   (correct)
-```
+The response parses cleanly (267 tokens, well under the 1024 cap), `background`
+and `overall_score` are both present, and Equation (3) runs end to end.
 
-So the model reads the images, distinguishes them, and answers correctly.
-Anything degenerate from here is prompt or judge behaviour, **not plumbing** —
-don't go looking at the harness again. The evidence below is what the
-*placeholder* produced and is kept only as the before-picture.
+Three things learned along the way that are easy to trip over again:
 
----
-
-### The failure, with the placeholder prompt
-
-`smoke_judge.py` on 2026-08-25, Qwen3-VL-8B, **placeholder prompt**:
-
-| request | images | SC (expected) |
-|---|---|---|
-| A followed | source + genuinely edited | 4.9991 |
-| B ignored | source + unchanged copy | 4.9437 |
-| **C text-only** | **none at all** | **5.0000** |
-
-A − B = **+0.055**. The images are definitely in the prompt (+396 tokens vs C).
-But a request with **no images scores 5.0**, so the number is a function of the
-prompt, not the pixels.
-
-**Do not generate data until this gap is real.** Every analysis in the report —
-AUROC, the leakage matrix, redundancy — is computed on ∆score. If ∆score is
-noise, all four analyses return noise, and 17,600 requests per profile buys
-nothing. This is cheap to keep re-testing and ruinous to discover afterwards.
-
-What this is *not* yet: a finding. The prompt is the invented placeholder, so
-this says nothing about the published protocol. A degenerate judge is one of the
-outcomes the audit exists to detect, but claiming it requires the real prompt.
-
-Order to work through it:
-1. **Get the real SFReward prompt in** (TODO 1 below). Now on the critical path,
-   not a nicety — until it is in, we cannot tell a degenerate judge from a
-   degenerate prompt of our own making.
-2. Run `smoke_judge` again. Section 2b probes the vision path with a plain
-   question ("what colour is the square?"). If it answers correctly, the model
-   sees fine and the scoring prompt is the problem; if not, look at the harness.
-3. Only when A − B is clearly positive, run the `pilot` profile end to end and
-   look at the score histogram before scaling to `main`.
+1. **The vision path is fine — never re-debug it.** Asked a plain question at
+   temperature 0, the model answers `red` / `blue` correctly for the two
+   images. Anything degenerate from here is prompt or judge behaviour.
+2. **A region the instruction does not name scores 0, correctly.**
+   `score_success` means "how well the edit follows the instruction", so for an
+   unnamed region it is 0 and `phi = min(0, preserve) = 0`. This is why
+   `stage0_coco.py` naming every region in the instruction matters: under this
+   protocol an unnamed region is not a scorable control, it is a guaranteed
+   zero. Do not "simplify" instruction construction to a single region.
+3. **Scores saturated at 0 and 25 with nothing in between.** Expected for
+   blatant synthetic inputs, but unconfirmed for subtle corruptions. If the
+   judge only ever emits rail values, delta-score is all-or-nothing, the
+   severity ladder carries no information, and AUROC degenerates. `smoke_judge`
+   now runs the real corruption engine at severities 1/2/3 and reports whether
+   any intermediate values exist. **Check this on real COCO edits in the pilot
+   before trusting any severity-dependent result.**
 
 ## Open TODOs
 

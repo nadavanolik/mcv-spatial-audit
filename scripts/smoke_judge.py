@@ -1,30 +1,30 @@
 """
-Judge plumbing check against synthetic images, using SpatialFlow-GRPO's real
-A.4.3 prompt. Judge VM only.
+The whole audit in miniature, on synthetic images. Judge VM only.
 
-Needs a loaded model but NO project data, so it runs before stage 1 has
-produced anything.
+Needs a loaded model but NO project data, so it runs before stage 1 exists.
+Uses the real A.4.3 prompt and the real corruption engine, so it exercises the
+actual pipeline rather than an approximation of it.
 
-Two regions in every image:
-    region 0  a square the instruction tells the editor to recolour
-    region 1  a distractor square the instruction never mentions
+Setup mirrors the experiment. Two regions, and — as stage0_coco.py really does
+— the instruction names BOTH, so both are legitimate `edit_region` entries:
 
-Three SC requests, one engine load:
-    A  followed     source + an image where region 0 really was recoloured
-    B  ignored      source + an unchanged copy
-    C  text-only    the same prompt with no images at all
+    instruction: "Change the blue square to red, and the green square to yellow."
+    edit:        both changes correctly applied          (the clean control)
+    variant_k:   that edit, with REGION 0 ONLY corrupted at severity k
 
-What each buys:
-  - A vs C token counts prove the pixels actually reach the model. vLLM can
-    resolve chat_template_content_format to 'string', silently dropping custom
-    content parts, and every score downstream would then be text-only noise.
-  - A vs B on REGION 0 is the discriminative test. A high score on A alone
-    proves nothing; a judge that answers 25 regardless would produce it too.
-    If B scores as high as A there is no signal for the audit to measure.
-  - REGION 1 is a free preview of the actual research question. It is untouched
-    in both A and B, so a judge with spatially resolved scores should hold it
-    roughly constant while region 0 moves. If region 1 tracks region 0, that is
-    leakage — the thing this project exists to quantify.
+Then score every region of each variant and watch where the number moves.
+
+    region 0 should FALL as severity rises      -> the judge is spatially resolved
+    region 1 should HOLD (it is untouched)      -> movement here is leakage
+    the severity ladder should be MONOTONE      -> the score is graded, not binary
+
+That last one matters as much as the first. A judge that only ever emits 0 or
+25 makes delta-score all-or-nothing, the severity ladder carries no information,
+and AUROC collapses to a step function. Blatant synthetic inputs will saturate;
+what we need to see is whether anything in between exists.
+
+A text-only request is included as a nuisance probe: the judge will happily
+score an edit it was shown no images of, which is worth a line in the report.
 
 Usage (judge VM):
     python -m scripts.smoke_judge --gpu-util 0.89
@@ -36,30 +36,44 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.corruptions import apply_corruption  # noqa: E402
 from src.judge_prompt import (  # noqa: E402
-    build_sc_prompt, build_pq_prompt, parse_sc, parse_pq, region_reward,
+    build_sc_prompt, build_pq_prompt, parse_sc, parse_pq,
 )
 from src.stage3_judge import load_engine, DEFAULT_GPU_UTIL  # noqa: E402
 
-INSTRUCTION = "Change the blue square to red."
+INSTRUCTION = "Change the blue square to red, and the green square to yellow."
+R0 = (60, 60, 140, 140)      # xywh — the region we corrupt
+R1 = (250, 250, 140, 140)    # xywh — untouched, the leakage probe
 REGIONS = [
-    {"region_id": 0, "label": "blue square", "bbox": (60, 60, 140, 140)},
-    {"region_id": 1, "label": "green square", "bbox": (250, 250, 140, 140)},
+    {"region_id": 0, "label": "the square in the upper left", "bbox": R0},
+    {"region_id": 1, "label": "the square in the lower right", "bbox": R1},
 ]
 
 
-def _images() -> tuple[Image.Image, Image.Image]:
+def _base_pair() -> tuple[Image.Image, Image.Image]:
+    """Source, and an edit where BOTH instructed changes were made correctly."""
     src = Image.new("RGB", (448, 448), (240, 240, 240))
     d = ImageDraw.Draw(src)
-    d.rectangle([60, 60, 200, 200], fill=(30, 30, 200))      # region 0
-    d.rectangle([250, 250, 390, 390], fill=(30, 160, 30))    # region 1
-    edit = src.copy()
-    ImageDraw.Draw(edit).rectangle([60, 60, 200, 200], fill=(200, 30, 30))
+    d.rectangle([60, 60, 200, 200], fill=(30, 30, 200))      # blue
+    d.rectangle([250, 250, 390, 390], fill=(30, 160, 30))    # green
+
+    edit = Image.new("RGB", (448, 448), (240, 240, 240))
+    d = ImageDraw.Draw(edit)
+    d.rectangle([60, 60, 200, 200], fill=(200, 30, 30))      # -> red
+    d.rectangle([250, 250, 390, 390], fill=(220, 210, 40))   # -> yellow
     return src, edit
+
+
+def _mask_r0() -> np.ndarray:
+    m = np.zeros((448, 448), np.uint8)
+    m[60:200, 60:200] = 255
+    return m
 
 
 def _msg(prompt: str, *images: Image.Image) -> list:
@@ -77,95 +91,87 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3-VL-8B-Instruct")
     ap.add_argument("--gpu-util", type=float, default=DEFAULT_GPU_UTIL)
+    ap.add_argument("--corruption", default="noise",
+                    choices=["blur", "saturate", "noise", "jpeg", "remove"])
     a = ap.parse_args()
 
     from vllm import SamplingParams
 
-    src, edit = _images()
+    src, edit = _base_pair()
+    mask, arr = _mask_r0(), np.asarray(edit)
     sc_prompt = build_sc_prompt(INSTRUCTION, REGIONS)
-    msgs = [
-        _msg(sc_prompt, src, edit),   # A
-        _msg(sc_prompt, src, src),    # B
-        _msg(sc_prompt),              # C
-        _msg(build_pq_prompt(), edit),
-    ]
+
+    # The clean control, then the same edit corrupted in region 0 only.
+    variants = [("clean", edit)]
+    for sev in (1, 2, 3):
+        out = apply_corruption(arr, mask, a.corruption, sev, "full", 1234 + sev)
+        variants.append((f"{a.corruption} s{sev}", Image.fromarray(out)))
+
+    msgs = [_msg(sc_prompt, src, im) for _, im in variants]
+    msgs.append(_msg(sc_prompt))                    # text-only nuisance probe
+    msgs.append(_msg(build_pq_prompt(), edit))      # PQ on the clean edit
 
     llm = load_engine(a.model, util=a.gpu_util)
     sp = SamplingParams(n=1, temperature=0.0, max_tokens=1024, seed=1234)
     outs = llm.chat(msgs, sp)
-    A, B, C, PQ = outs
-    labels = ["A followed (src+edited)", "B ignored (src+src)", "C text-only"]
+    scs = [parse_sc(o.outputs[0].text) for o in outs[:len(variants)]]
+    text_only = parse_sc(outs[len(variants)].outputs[0].text)
+    pq = parse_pq(outs[-1].outputs[0].text)
 
-    print("\n" + "=" * 68)
-    print("0. DOES THE REAL A.4.3 PROMPT PARSE AT ALL?")
-    print("=" * 68)
-    print(f"  response length: {len(A.outputs[0].text)} chars, "
-          f"{len(A.outputs[0].token_ids)} tokens")
-    scA = parse_sc(A.outputs[0].text)
-    if not scA:
-        print("  FAIL: could not parse. Raw response follows:")
-        print("  " + A.outputs[0].text[:1200].replace("\n", "\n  "))
+    print("\n" + "=" * 70)
+    print("0. PARSING")
+    print("=" * 70)
+    bad = [i for i, s in enumerate(scs) if not s.get("regions")]
+    print(f"  {len(scs) - len(bad)}/{len(scs)} responses parsed; PQ={pq}")
+    for i, o in enumerate(outs[:len(variants)]):
+        if len(o.outputs[0].token_ids) >= 1020:
+            print(f"  WARNING: variant {i} hit the 1024-token cap.")
+    if bad:
+        print(f"  FAIL: unparsed responses at {bad}. First raw response:")
+        print("  " + outs[bad[0]].outputs[0].text[:1000].replace("\n", "\n  "))
         return 1
-    print(f"  parsed: regions={sorted(scA.get('regions', {}))} "
-          f"background={'yes' if 'background' in scA else 'NO'} "
-          f"overall={'yes' if 'overall' in scA else 'NO'}")
-    pq = parse_pq(PQ.outputs[0].text)
-    print(f"  PQ: {pq}")
-    if len(A.outputs[0].token_ids) >= 1020:
-        print("  WARNING: response hit the 1024-token cap; raise max_tokens.")
 
-    print("\n" + "=" * 68)
-    print("1. DO THE IMAGES REACH THE MODEL?")
-    print("=" * 68)
-    for lbl, o in zip(labels, outs[:3]):
-        print(f"  {lbl:<26} prompt tokens: {len(o.prompt_token_ids)}")
-    delta = len(A.prompt_token_ids) - len(C.prompt_token_ids)
-    print(f"\n  two images add {delta} tokens -> "
-          f"{'OK' if delta >= 50 else 'FAIL: content parts were dropped'}")
+    print("\n" + "=" * 70)
+    print("1. DOES THE SCORE TRACK DAMAGE, AND ONLY WHERE THE DAMAGE IS?")
+    print("=" * 70)
+    print(f"  {'variant':<16} {'region0 phi':>12} {'region1 phi':>12} {'bg':>8}")
+    r0s, r1s = [], []
+    for (name, _), sc in zip(variants, scs):
+        p0, p1 = _phi(sc, 0), _phi(sc, 1)
+        r0s.append(p0)
+        r1s.append(p1)
+        print(f"  {name:<16} {str(p0):>12} {str(p1):>12} {str(sc.get('background')):>8}")
+    print(f"  {'(text-only)':<16} {str(_phi(text_only, 0)):>12} "
+          f"{str(_phi(text_only, 1)):>12} {str(text_only.get('background')):>8}")
 
-    print("\n" + "=" * 68)
-    print("2. IS THE JUDGE READING THEM?  (the one that matters)")
-    print("=" * 68)
-    print(f"  {'':26} {'region0 phi':>12} {'region1 phi':>12} {'bg':>8}")
-    parsed = []
-    for lbl, o in zip(labels, outs[:3]):
-        sc = parse_sc(o.outputs[0].text)
-        parsed.append(sc)
-        print(f"  {lbl:<26} {str(_phi(sc, 0)):>12} {str(_phi(sc, 1)):>12} "
-              f"{str(sc.get('background')):>8}")
+    print("\n" + "-" * 70)
+    if all(v is not None for v in r0s):
+        drop = r0s[0] - r0s[-1]
+        print(f"  region 0, clean -> worst: {r0s[0]} -> {r0s[-1]}  (drop {drop:+.1f})")
+        print(f"  {'OK: corruption moves the targeted region.' if drop >= 3 else 'FAIL: corruption barely moves the region it damaged.'}")
+        mono = all(x >= y for x, y in zip(r0s[1:], r0s[2:]))
+        distinct = len(set(r0s))
+        print(f"  severity ladder: {r0s[1:]}  monotone={mono}  distinct values={distinct}")
+        if distinct <= 2:
+            print("  WARNING: the judge is emitting only rail values. delta-score")
+            print("  becomes all-or-nothing and the severity ladder carries no")
+            print("  information. Check this again on real COCO edits.")
+    if all(v is not None for v in r1s):
+        swing = max(r1s) - min(r1s)
+        print(f"\n  region 1 (never touched): {r1s}  swing {swing:.1f}")
+        print(f"  {'OK: no leakage into the untouched region.' if swing < 3 else 'LEAKAGE: an untouched region moved when its neighbour was damaged. This is the finding the audit exists to measure.'}")
 
-    a0, b0 = _phi(parsed[0], 0), _phi(parsed[1], 0)
-    a1, b1 = _phi(parsed[0], 1), _phi(parsed[1], 1)
-    c0 = _phi(parsed[2], 0)
-    if c0 is not None:
-        print(f"\n  NOTE: text-only, with NO IMAGES, still scored region 0 at {c0}.")
-        print("  Whatever that number is measuring, it is not the pixels.")
+    print("\n" + "=" * 70)
+    print("2. NUISANCE PROBE")
+    print("=" * 70)
+    t0 = _phi(text_only, 0)
+    print(f"  With NO IMAGES at all, the judge scored region 0 at {t0}.")
+    print("  It will score an edit it was never shown. Worth a line in the")
+    print("  report under exploitability.")
 
-    ok_signal = False
-    if a0 is not None and b0 is not None:
-        gap0 = a0 - b0
-        print(f"\n  region 0 (edited):   A - B = {gap0:+.1f} of 25")
-        ok_signal = gap0 >= 3
-        if not ok_signal:
-            print("  FAIL: an obeyed instruction scores no better than an ignored")
-            print("  one. No signal to audit. Do not generate data yet.")
-        else:
-            print("  OK: the judge separates obeyed from ignored.")
-    if a1 is not None and b1 is not None:
-        print(f"  region 1 (untouched): A - B = {a1 - b1:+.1f} of 25")
-        print("  (should be ~0 — it is untouched in both. Movement here is")
-        print("   leakage, which is exactly what the audit measures.)")
-
-    print("\n" + "=" * 68)
-    print("3. EQUATION (3) END TO END")
-    print("=" * 68)
-    for rid in (0, 1, "bg"):
-        print(f"  R(region={rid!r}) = {region_reward(scA, rid, pq)}")
-
-    print(f"\nparse={'ok' if scA else 'FAILED'} "
-          f"images={'ok' if delta >= 50 else 'FAILED'} "
-          f"signal={'ok' if ok_signal else 'FAILED'}")
-    return 0 if (scA and delta >= 50 and ok_signal) else 1
+    ok = all(v is not None for v in r0s) and (r0s[0] - r0s[-1]) >= 3
+    print(f"\nparse=ok  localisation={'ok' if ok else 'FAILED'}")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
