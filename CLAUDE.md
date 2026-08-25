@@ -250,9 +250,10 @@ it — a failure there must not block the other four VMs.
     which preserves our custom content parts. `'string'` would have silently
     dropped the images.
   - The logprob structure is `list[dict[int, vllm.logprobs.Logprob]]` with
-    `.decoded_token` and `.logprob` — exactly what
-    `expected_score_from_logprobs` assumes. It returned
-    `{'SC': 4.9993, 'PQ': 5.0000}`. **No rewrite needed.**
+    `.decoded_token` and `.logprob`. Note this was verified against the
+    *placeholder's* flat 1-5 output; the vLLM-side structure is confirmed, but
+    `expected_score_from_logprobs` itself no longer applies under A.4.3 — see
+    architectural decision 6.
 
   `stage3_judge.py` is verified as far as synthetic data can take it.
 - `stage4_analyze.py` — logic is straightforward but has never seen real data.
