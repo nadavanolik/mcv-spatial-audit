@@ -28,7 +28,13 @@ from . import judge_prompt
 from .judge_prompt import build_prompt, parse_scores, expected_score_from_logprobs
 from .schema import shard
 
-MAX_PIXELS = 1024 * 1024        # ~1300 vision tokens/image
+# 768^2 = 589,824. Chosen to be a no-op on our actual data while shrinking the
+# worst case vLLM profiles against: stage 0 writes COCO images at native size
+# (typically 640x480 ~ 307k px) and stage1_edit resizes each edit back to
+# src.size, so nothing we judge exceeds ~410k px. Nothing is downscaled — but
+# vLLM profiles the encoder cache at max_pixels regardless of what we send, and
+# at 1024^2 that overhead left the KV cache at -0.40 GiB on the A10.
+MAX_PIXELS = 768 * 768
 MIN_PIXELS = 256 * 256
 
 
@@ -44,7 +50,7 @@ MIN_PIXELS = 256 * 256
 DEFAULT_GPU_UTIL = 0.85
 
 
-def load_engine(model: str, max_len: int = 8192, util: float = DEFAULT_GPU_UTIL):
+def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL):
     from vllm import LLM
 
     # vLLM's own message for this reports the shortfall but not the fix, and it
@@ -81,7 +87,17 @@ def load_engine(model: str, max_len: int = 8192, util: float = DEFAULT_GPU_UTIL)
         # send two images.
         limit_mm_per_prompt={"image": 2, "video": 0},
         mm_processor_kwargs={"max_pixels": MAX_PIXELS, "min_pixels": MIN_PIXELS},
-        # enforce_eager=True,   # uncomment if CUDA graph capture OOMs on the vGPU
+        # Cap the prefill chunk. vLLM defaults this to max_model_len and sizes
+        # the profiling activation peak from it; our prompts are ~1,750 tokens
+        # (2 images ~750 each + ~250 of text), so 4096 is ample headroom and
+        # halves the peak that was pushing the KV cache negative.
+        max_num_batched_tokens=4096,
+        # Eager, not CUDA graphs. Graph capture reserves memory this card does
+        # not have to spare, and it costs ~37s of torch.compile at every engine
+        # start. The throughput it buys is almost all on the decode side, and
+        # our outputs are ~15-32 tokens against a multi-image prefill — so
+        # prefill dominates and eager costs us very little here.
+        enforce_eager=True,
     )
 
 
