@@ -182,12 +182,15 @@ it — a failure there must not block the other four VMs.
 - Repo layout was flattened in the scaffold commit and restored to the
   documented `src/` / `tests/` / `scripts/` tree on 2026-08-25 — the relative
   imports (`from .schema import ...`) and both shell scripts require it.
-- **OpenCV 4.10.0.84 -> 4.11.0.86 is byte-equivalent** for our corruptions
-  (2026-08-25, laptop). The fixture was rendered under both, with `numpy` and
-  `Pillow` held identical and only `cv2` swapped: all five per-corruption
-  hashes and the total matched exactly. That is why the bump forced by vLLM did
-  not re-baseline the audit. Verified on Windows only — a Linux VM agreeing
-  with `776feeddd281fa726195bf504c7b19c8` post-bump closes the loop.
+- **OpenCV 4.10.0.84 -> 4.11.0.86 is byte-equivalent** for our corruptions.
+  Checked twice: on the laptop by rendering the fixture under both versions
+  with `numpy`/`Pillow` held identical (all five per-corruption hashes and the
+  total matched), and then on VM `mcvgpu2025s-0050` (2026-08-25), which printed
+  `776feeddd281fa726195bf504c7b19c8` — the pre-bump container reference —
+  while running 4.11.0.86. The bump forced by vLLM re-baselines nothing.
+- **The laptop's hash differs for platform reasons only, as suspected.** Linux
+  gives `776feedd…`; Windows gives `5073799d…` on identical pins. Both are
+  internally stable. Compare VM hashes to `776feedd…`; never to the laptop's.
 - `stage2_corrupt.py` — ran end-to-end on the laptop (2026-08-25) against a
   synthetic 3-base fixture: 81/81 variants rendered. Its free-space guard used
   `os.statvfs`, which does not exist on Windows; now `shutil.disk_usage`.
@@ -200,10 +203,17 @@ it — a failure there must not block the other four VMs.
 - `stage0_coco.py` — needs COCO downloaded; `pycocotools` API calls unverified.
 - `stage1_edit.py` — FLUX Kontext is gated on HF; pipeline class name and
   offload behaviour unverified on this hardware.
-- `stage3_judge.py` — **the highest-risk file.** vLLM's `llm.chat()` multimodal
-  message format for Qwen3-VL, the `image_pil` content type, `mm_processor_kwargs`
-  key names, and the logprob structure in `expected_score_from_logprobs` all need
-  checking against the installed vLLM version. Expect to fix this file.
+- `stage3_judge.py` — **the highest-risk file**, but less risky than it was.
+  Confirmed against the installed vllm 0.11.0 on a judge VM (2026-08-25):
+  `LLM.chat` accepts `list[list[message]]`, so batching a list of message-lists
+  is right; it takes `mm_processor_kwargs`; and **the `image_pil` content type
+  is real** — `vllm/entrypoints/chat_utils.py` defines the field and a
+  `parse_image_pil` handler. Still unverified: the exact content-part dict
+  shape (is the discriminator literally `"type": "image_pil"`?), whether
+  `chat_template_content_format="auto"` resolves to a format that keeps custom
+  content parts, `limit_mm_per_prompt`/`mm_processor_kwargs` on `LLM.__init__`
+  rather than `chat`, and the logprob structure that
+  `expected_score_from_logprobs` walks (`lp_dict[tok_id].decoded_token`).
 - `stage4_analyze.py` — logic is straightforward but has never seen real data.
 
 ## Open TODOs
