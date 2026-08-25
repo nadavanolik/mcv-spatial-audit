@@ -1,0 +1,14 @@
+# Judge VM — stage 3. Installs core too, so this is the only command you run.
+#
+# vllm>=0.11.0 is required for Qwen3-VL support.
+#
+# torch is deliberately NOT pinned here: vLLM pins the exact torch build it was
+# compiled against, and a second pin from us is how you get a resolver conflict
+# or a silently mismatched CUDA build. Let vllm choose it.
+#
+# bf16 only. Never fp8 — the A10 is SM 8.6 and fp8 kernels need SM 8.9+, so the
+# official Qwen FP8 checkpoint is unusable on this hardware.
+
+-r requirements.txt
+
+vllm==0.11.0

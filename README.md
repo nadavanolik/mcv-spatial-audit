@@ -24,14 +24,30 @@ Constraints baked into the code:
 ```bash
 cd ~ && git clone <repo> mcv_project && cd mcv_project
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
 
 echo 'export HF_HOME=$HOME/hf_cache'        >> ~/.bashrc
 echo 'export HF_HUB_ENABLE_HF_TRANSFER=1'   >> ~/.bashrc
 source ~/.bashrc
 
-bash scripts/verify_determinism.sh   # compare the hash against a teammate's
+bash scripts/setup.sh <role>    # judge | editor | coco | core
 ```
+
+One command. It installs the right dependency set for your role, prints the
+pinned versions the corruption bytes depend on, warns if more than one OpenCV
+is installed, and finishes by running the determinism check and printing the
+hash to compare against a teammate's.
+
+Dependencies are split by role because the 90G disk means **no VM holds both
+the editor and a judge**:
+
+| File | Who | Adds |
+|---|---|---|
+| `requirements.txt` | everyone, incl. the no-GPU laptop | numpy/opencv/pillow/pandas/sklearn — pinned, determinism-critical |
+| `requirements-judge.txt` | stage 3 VMs | `vllm` (which pins its own torch) |
+| `requirements-editor.txt` | the one stage 1 VM | `diffusers`, `transformers`, `accelerate` |
+| `requirements-coco.txt` | whoever runs stage 0 | `pycocotools` — builds from source, needs gcc |
+
+Each role file pulls in `requirements.txt`, so you install one thing, not two.
 
 **The fixture hash must match across all five VMs.** If it does not, your
 shards are not comparable and every downstream number is meaningless. On this

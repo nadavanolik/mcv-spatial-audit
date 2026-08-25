@@ -81,8 +81,10 @@ Once base edits exist, everyone runs `SHARD=k bash scripts/run_shard.sh`.
 ## This week
 
 1. Pick roles. Nothing parallelizes until this happens.
-2. Everyone: clone the repo, `pip install -r requirements.txt`, run
-   `bash scripts/verify_determinism.sh`, post your hash. **All five must match.**
+2. Everyone: clone the repo, then one command — `bash scripts/setup.sh <role>`
+   (`judge` for most of you, `editor` for whoever runs stage 1, `coco` for
+   whoever runs stage 0). It installs your dependencies and finishes by
+   printing a hash. Post it. **All five must match.**
 3. Someone find the real SFReward prompt in arXiv:2606.26872's appendix. It's a
    hard dependency and currently a placeholder in the code.
 4. **Run the pilot end to end** — 5 images, ~240 requests, minutes. Then look at

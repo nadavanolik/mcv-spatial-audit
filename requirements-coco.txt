@@ -1,0 +1,10 @@
+# Stage 0 only — the COCO instance-seg filter. Installs core too.
+#
+# Split out because pycocotools builds from source and needs a working gcc plus
+# Cython. If it fails, you have no sudo to install a compiler — but nothing
+# outside stage0_coco.py imports it, so the rest of the pipeline is unaffected.
+# Only the VM that runs stage 0 needs this.
+
+-r requirements.txt
+
+pycocotools==2.0.8

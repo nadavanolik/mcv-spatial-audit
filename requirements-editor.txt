@@ -1,0 +1,15 @@
+# Editor VM — stage 1 (FLUX Kontext). Installs core too.
+#
+# This VM must never also hold a judge: 90G root disk, and the diffusion
+# weights plus a judge checkpoint do not both fit.
+#
+# torch comes in via diffusers/accelerate; not pinned here for the same reason
+# as in requirements-judge.txt.
+
+-r requirements.txt
+
+diffusers==0.35.1
+transformers==4.56.0
+accelerate==1.10.0
+sentencepiece==0.2.0
+protobuf==5.28.0

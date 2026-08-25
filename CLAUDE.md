@@ -135,11 +135,25 @@ src/build_manifest.py   expand base specs into the design matrix
 src/stage2_corrupt.py   regenerate this VM's shard into /dev/shm
 src/stage3_judge.py     sharded vLLM judging
 src/stage4_analyze.py   AUROC, leakage matrix, redundancy, noise floor
+scripts/setup.sh        one-command bootstrap: deps for a role, then the hash check
 scripts/run_shard.sh    one VM's share of stages 2+3
 scripts/verify_determinism.sh   cross-VM hash check
 tests/test_determinism.py
 config.yaml             pilot / main / full_cross profiles
+
+requirements.txt          core, every machine (determinism-critical pins)
+requirements-judge.txt    + vllm            [judge VMs]
+requirements-editor.txt   + diffusers etc.  [editor VM]
+requirements-coco.txt     + pycocotools     [stage 0 only]
 ```
+
+Dependencies are split by role, not commented out in one file. The role files
+each `-r requirements.txt`, so setup is always exactly one install command.
+Don't pin `torch` in the role files — vLLM and diffusers pin the build they were
+compiled against, and a second pin from us produces either a resolver conflict
+or a silently mismatched CUDA build. Don't move `pycocotools` back into core: it
+builds from source, needs a compiler we cannot install, and only stage 0 imports
+it — a failure there must not block the other four VMs.
 
 ## Status — what is verified vs what has never run
 
