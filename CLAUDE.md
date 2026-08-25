@@ -82,7 +82,8 @@ Consequences, all already reflected in the code:
 | A10 = SM 8.6 (Ampere) | **bf16 only. Never fp8** — those kernels need SM 8.9+. The official Qwen FP8 checkpoint is not usable here. |
 | `A10-24Q` reserves ~2.4GiB | Only **21.34 of 23.72GiB is free** at startup. vLLM budgets `gpu_memory_utilization` against *total* but demands that much *free*, so 0.90 misses by 0.01GiB and the engine dies before loading a weight. `DEFAULT_GPU_UTIL = 0.85`. |
 | Qwen3-VL accepts video | `limit_mm_per_prompt` **must** carry `"video": 0`. Left unset, vLLM sizes the encoder cache for a max-length video (151250 tokens) and OOMs in `profile_run` trying to allocate 4.62GiB on top of 16.8GiB of weights. |
-| 16.8GiB of weights on a 20.16GiB budget | Everything else has to fit in ~3.4GiB, so `load_engine` runs **eager** (no CUDA graphs), caps `max_num_batched_tokens=4096`, and `max_model_len=4096`. At 8192 + graphs the KV cache came out at **-0.40GiB**. |
+| 16.8GiB of weights on a 20.16GiB budget | Everything else has to fit in ~3.4GiB, so `load_engine` runs **eager** (no CUDA graphs), caps `max_num_batched_tokens=2048`, and `max_model_len=4096`. At 8192 + graphs the KV cache came out at **-0.40GiB**. |
+| **Qwen3-VL-8B bf16 barely fits** | At `--gpu-util 0.89` it starts, but the KV cache is **0.70GiB = 5,072 tokens, max concurrency 1.24x** — effectively serial. The `main` profile's ~1.2h/VM budget assumed real batching. **A 4B judge is the structural fix**; see the throughput note below. |
 | No shared FS | Corrupted variants are **regenerated per-VM**, never transferred. Only ~300MB of base edits moves, once, via HF Hub. |
 | No sudo | `opencv-python-headless` — the normal build needs `libGL.so.1` via apt. Never swap this. |
 | 90G disk | VMs are **role-specialised**: the editor VM holds the diffusion model, judge VMs hold judges. Never both. |
@@ -235,16 +236,17 @@ it — a failure there must not block the other four VMs.
 
   **`build_requests` and `load_engine` therefore need no changes.**
 
-  Still open, and only a loaded model can answer — run `scripts/smoke_judge.py`
-  on a judge VM, which needs the model but no project data:
-  - Whether `chat_template_content_format="auto"` resolves to a format that
-    preserves custom content parts for Qwen3-VL, or silently drops the images.
-    Watch the prompt token count: two 448x448 images should add hundreds of
-    vision tokens, so a short prompt means they were dropped.
-  - The logprob structure `expected_score_from_logprobs` walks
-    (`lp_dict[tok_id].decoded_token`). If it is wrong, `sc_expected` is null
-    everywhere and the continuous readout that keeps AUROC out of a pile of
-    ties is silently lost.
+  **A real judge call now runs end to end** (2026-08-25, `smoke_judge.py`,
+  `--gpu-util 0.89`), which closes the last two:
+  - `chat_template_content_format="auto"` resolves to `'openai'` for Qwen3-VL,
+    which preserves our custom content parts. `'string'` would have silently
+    dropped the images.
+  - The logprob structure is `list[dict[int, vllm.logprobs.Logprob]]` with
+    `.decoded_token` and `.logprob` — exactly what
+    `expected_score_from_logprobs` assumes. It returned
+    `{'SC': 4.9993, 'PQ': 5.0000}`. **No rewrite needed.**
+
+  `stage3_judge.py` is verified as far as synthetic data can take it.
 - `stage4_analyze.py` — logic is straightforward but has never seen real data.
 
 ## Open TODOs
