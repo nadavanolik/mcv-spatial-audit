@@ -1,0 +1,11 @@
+# Local dev venv (laptop). Not the VM environment — see requirements.txt.
+.venv/
+__pycache__/
+*.pyc
+
+# Never commit: bulk artefacts and secrets (CLAUDE.md guardrails)
+data/
+out/
+*.parquet
+.env
+hf_token*

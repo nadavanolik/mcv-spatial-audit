@@ -23,6 +23,33 @@ improvement?).
 
 No training. Inference only.
 
+## Where code runs — laptop vs VMs
+
+Development happens on a **Windows laptop with no GPU**. The five A10 VMs are
+separate machines reached over SSH, and **code reaches them only via git
+push/pull** — there is no shared filesystem with the laptop, and no ad-hoc file
+copying.
+
+| Runs on the laptop | GPU VM only |
+|---|---|
+| `src/schema.py`, `src/corruptions.py`, `src/build_manifest.py` | `src/stage1_edit.py` — FLUX Kontext, editor VM |
+| `tests/test_determinism.py`, `scripts/verify_determinism.sh` | `src/stage3_judge.py` — vLLM |
+| `src/stage2_corrupt.py`, `src/stage4_analyze.py` — CPU-only, given their inputs | `scripts/run_shard.sh` — wraps both of the above |
+| | `src/stage0_coco.py` — needs the COCO download |
+
+Only `stage1_edit.py` and `stage3_judge.py` import torch/diffusers/vllm; the
+rest is pure CPU.
+
+**Consequence for Claude Code:** it runs on the laptop and *cannot execute the
+GPU stages at all*. When one needs testing, it must produce the exact command to
+run over SSH and wait for the user to paste the output back. Never report a GPU
+stage as verified on the strength of a local run, and never add code whose only
+validation path is running it locally.
+
+Local env: `.venv/`, Python **3.12** — the pinned `numpy==1.26.4` and
+`opencv-python-headless==4.10.0.84` have no 3.13 wheels. Invoke it explicitly
+(`./.venv/Scripts/python.exe tests/test_determinism.py`).
+
 ## Hardware — these are hard constraints, not preferences
 
 Five VMs, one per student. Each is an Azure NV36ads_A10_v5:
@@ -105,13 +132,23 @@ config.yaml             pilot / main / full_cross profiles
 ## Status — what is verified vs what has never run
 
 **Verified by actual execution:**
-- `tests/test_determinism.py` — all 5 properties pass.
-- Cross-VM fixture hash on a reference container: `776feeddd281fa726195bf504c7b19c8`
-  (the team's five VMs must agree with *each other*; a pin drift may shift the
-  absolute value).
+- `tests/test_determinism.py` — all 5 properties pass, on the reference container
+  and (2026-08-25) on the Windows laptop under `.venv` / Python 3.12.
+- Cross-VM fixture hash on a reference container: `776feeddd281fa726195bf504c7b19c8`.
+  The same script on the Windows laptop prints `5073799d8511586afc2dc504b330abea`.
+  **This is expected and is not a failure:** the invariant that matters is that
+  the five *Linux* VMs agree with each other. The laptop is a different platform
+  (different OpenCV/libjpeg build), so its hash is **not** a valid reference —
+  never compare a VM's hash against it. Per-corruption laptop hashes, if anyone
+  wants to localise a future cross-VM mismatch:
+  `blur b9d191e7be9487bc`, `saturate 55ab816f6c3f49f4`, `noise 1692c77f84ed2c3a`,
+  `jpeg 4a0f806a2ce9d42e`, `remove 5fc3f8333affcbc2`.
 - Manifest expansion and hash sharding: 200 bases → 24,800 variants, shards
   `[5025, 4895, 4930, 4954, 4996]`, lossless and unique.
 - All modules parse.
+- Repo layout was flattened in the scaffold commit and restored to the
+  documented `src/` / `tests/` / `scripts/` tree on 2026-08-25 — the relative
+  imports (`from .schema import ...`) and both shell scripts require it.
 
 **Never executed — expect real bugs here:**
 - `stage0_coco.py` — needs COCO downloaded; `pycocotools` API calls unverified.

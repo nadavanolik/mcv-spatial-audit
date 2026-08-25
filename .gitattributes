@@ -1,0 +1,4 @@
+# Laptop is Windows, every VM is Linux. Shell scripts must stay LF in the repo
+# and in the VM checkout — a CRLF .sh fails as: bash: $'\r': command not found
+*.sh text eol=lf
+*.py text eol=lf
