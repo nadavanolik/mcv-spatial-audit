@@ -143,6 +143,7 @@ src/stage2_corrupt.py   regenerate this VM's shard into /dev/shm
 src/stage3_judge.py     sharded vLLM judging
 src/stage4_analyze.py   AUROC, leakage matrix, redundancy, noise floor
 scripts/setup.sh        one-command bootstrap: deps for a role, then the hash check
+scripts/smoke_judge.py  one real judge call on synthetic images  [JUDGE VM ONLY]
 scripts/run_shard.sh    one VM's share of stages 2+3
 scripts/verify_determinism.sh   cross-VM hash check
 tests/test_determinism.py
@@ -214,18 +215,27 @@ it — a failure there must not block the other four VMs.
     neither is an explicit parameter — **don't "fix" that by deleting them.**
     `mm_processor_kwargs`, `dtype` and `gpu_memory_utilization` are explicit.
 
-  Still open, and only a loaded model can answer:
-  - Whether `chat_template_content_format="auto"` resolves to a format that
-    preserves custom content parts for Qwen3-VL.
-  - The logprob structure `expected_score_from_logprobs` walks
-    (`lp_dict[tok_id].decoded_token`).
+  - A **raw** PIL image is what the parser wants, confirmed at runtime:
+    `MM_PARSER_MAP["image_pil"]({"type": ..., "image_pil": img})` returns the
+    identical object. Ignore `CustomChatCompletionContentPILImageParam`'s
+    annotation of `Optional[PILImage]` (a pydantic wrapper) — its own docstring
+    example and `parse_image_pil`'s `Optional[Image.Image]` both say raw, and
+    TypedDict annotations are not runtime-enforced. Do not add a wrapper.
+  - `EngineArgs` really does carry `max_model_len`, `limit_mm_per_prompt`,
+    `mm_processor_kwargs`, `dtype`, `gpu_memory_utilization`.
 
-  One annotation oddity to be aware of if images ever fail to attach:
-  `CustomChatCompletionContentPILImageParam` annotates `image_pil` as
-  `Optional[PILImage]` (a pydantic wrapper), but its own docstring example and
-  the `parse_image_pil` signature (`Optional[Image.Image]`) both say a raw PIL
-  image. We pass raw. TypedDict annotations are not enforced at runtime, so the
-  annotation is the outlier, not us.
+  **`build_requests` and `load_engine` therefore need no changes.**
+
+  Still open, and only a loaded model can answer — run `scripts/smoke_judge.py`
+  on a judge VM, which needs the model but no project data:
+  - Whether `chat_template_content_format="auto"` resolves to a format that
+    preserves custom content parts for Qwen3-VL, or silently drops the images.
+    Watch the prompt token count: two 448x448 images should add hundreds of
+    vision tokens, so a short prompt means they were dropped.
+  - The logprob structure `expected_score_from_logprobs` walks
+    (`lp_dict[tok_id].decoded_token`). If it is wrong, `sc_expected` is null
+    everywhere and the continuous readout that keeps AUROC out of a pile of
+    ties is silently lost.
 - `stage4_analyze.py` — logic is straightforward but has never seen real data.
 
 ## Open TODOs
