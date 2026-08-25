@@ -87,6 +87,15 @@ def _phi(sc: dict, rid: int):
     return min(pair) if pair else None
 
 
+def _pair(sc: dict, rid: int) -> str:
+    """success/preserve separately. phi = min() hides which axis moved, and
+    corruption should hit `preserve` while leaving `success` untouched — the
+    edit still follows the instruction, it is just damaged. If neither moves,
+    the judge is blind to degradation rather than merely compressing it."""
+    p = sc.get("regions", {}).get(rid)
+    return f"{p[0]:.0f}/{p[1]:.0f}" if p else "-/-"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3-VL-8B-Instruct")
@@ -134,15 +143,19 @@ def main() -> int:
     print("\n" + "=" * 70)
     print("1. DOES THE SCORE TRACK DAMAGE, AND ONLY WHERE THE DAMAGE IS?")
     print("=" * 70)
-    print(f"  {'variant':<16} {'region0 phi':>12} {'region1 phi':>12} {'bg':>8}")
+    print("  columns are success/preserve, then phi = min(success, preserve)")
+    print(f"  {'variant':<16} {'r0 s/p':>10} {'r0 phi':>7} {'r1 s/p':>10} "
+          f"{'r1 phi':>7} {'bg':>6}")
     r0s, r1s = [], []
     for (name, _), sc in zip(variants, scs):
         p0, p1 = _phi(sc, 0), _phi(sc, 1)
         r0s.append(p0)
         r1s.append(p1)
-        print(f"  {name:<16} {str(p0):>12} {str(p1):>12} {str(sc.get('background')):>8}")
-    print(f"  {'(text-only)':<16} {str(_phi(text_only, 0)):>12} "
-          f"{str(_phi(text_only, 1)):>12} {str(text_only.get('background')):>8}")
+        print(f"  {name:<16} {_pair(sc, 0):>10} {str(p0):>7} {_pair(sc, 1):>10} "
+              f"{str(p1):>7} {str(sc.get('background')):>6}")
+    print(f"  {'(text-only)':<16} {_pair(text_only, 0):>10} "
+          f"{str(_phi(text_only, 0)):>7} {_pair(text_only, 1):>10} "
+          f"{str(_phi(text_only, 1)):>7} {str(text_only.get('background')):>6}")
 
     print("\n" + "-" * 70)
     if all(v is not None for v in r0s):
@@ -155,7 +168,8 @@ def main() -> int:
         if distinct <= 2:
             print("  WARNING: the judge is emitting only rail values. delta-score")
             print("  becomes all-or-nothing and the severity ladder carries no")
-            print("  information. Check this again on real COCO edits.")
+            print("  information. Check this again on real COCO edits, and try")
+            print("  --corruption remove / blur / jpeg before concluding.")
     if all(v is not None for v in r1s):
         swing = max(r1s) - min(r1s)
         print(f"\n  region 1 (never touched): {r1s}  swing {swing:.1f}")

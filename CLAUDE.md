@@ -258,38 +258,58 @@ it — a failure there must not block the other four VMs.
   `stage3_judge.py` is verified as far as synthetic data can take it.
 - `stage4_analyze.py` — logic is straightforward but has never seen real data.
 
-## Judge sanity — RESOLVED 2026-08-25
+## Judge behaviour — what is settled and what is the top risk
 
-The placeholder prompt was the entire problem. With A.4.3 in, on synthetic
-squares, Qwen3-VL-8B separates an obeyed instruction from an ignored one by the
-full width of the scale:
+Settled 2026-08-25 (synthetic squares, real A.4.3 prompt, Qwen3-VL-8B):
 
-| | region 0 phi | region 1 phi | bg |
+- **The harness is correct.** Prompt parses, `background` / `overall_score`
+  present, Equation (3) runs, images demonstrably reach the model (+396 tokens),
+  vision path confirmed by a plain-question probe answering `red`/`blue`
+  correctly. **Never re-debug the request path.**
+- **The judge discriminates instruction-following.** Obeyed 25.0 vs ignored 0.0
+  on the targeted region — the full width of the scale. The old placeholder
+  prompt was the entire cause of the earlier all-5s result.
+
+### TOP RISK — the judge did not react to corruption at all
+
+Same instruction, correctly applied, then region 0 corrupted with `noise` at
+severities 1/2/3:
+
+| variant | region 0 phi | region 1 phi | bg |
 |---|---|---|---|
-| instruction obeyed | **25.0** | 0.0 | 25.0 |
-| instruction ignored | **0.0** | 0.0 | 25.0 |
+| clean | 25.0 | 25.0 | 25.0 |
+| noise s1 | 25.0 | 25.0 | 25.0 |
+| noise s2 | 25.0 | 25.0 | 25.0 |
+| noise s3 | 25.0 | 25.0 | 25.0 |
+| text-only (no images) | 25.0 | 25.0 | 25.0 |
 
-The response parses cleanly (267 tokens, well under the 1024 cap), `background`
-and `overall_score` are both present, and Equation (3) runs end to end.
+Every cell 25.0. **If this holds on real data, ∆score is 0 everywhere and AUROC
+is 0.5 by construction — the whole audit measures nothing.**
 
-Three things learned along the way that are easy to trip over again:
+It is *not* that the judge is stuck at 25: it emitted 0.0 when the instruction
+was ignored. It appears blind specifically to **degradation of an edit it has
+already judged compliant** — which is precisely what stage 2 perturbs.
 
-1. **The vision path is fine — never re-debug it.** Asked a plain question at
-   temperature 0, the model answers `red` / `blue` correctly for the two
-   images. Anything degenerate from here is prompt or judge behaviour.
-2. **A region the instruction does not name scores 0, correctly.**
-   `score_success` means "how well the edit follows the instruction", so for an
-   unnamed region it is 0 and `phi = min(0, preserve) = 0`. This is why
-   `stage0_coco.py` naming every region in the instruction matters: under this
-   protocol an unnamed region is not a scorable control, it is a guaranteed
-   zero. Do not "simplify" instruction construction to a single region.
-3. **Scores saturated at 0 and 25 with nothing in between.** Expected for
-   blatant synthetic inputs, but unconfirmed for subtle corruptions. If the
-   judge only ever emits rail values, delta-score is all-or-nothing, the
-   severity ladder carries no information, and AUROC degenerates. `smoke_judge`
-   now runs the real corruption engine at severities 1/2/3 and reports whether
-   any intermediate values exist. **Check this on real COCO edits in the pilot
-   before trusting any severity-dependent result.**
+Do not conclude this yet. Confounds, in the order worth eliminating:
+
+1. **Flat synthetic squares are far out of distribution.** Real COCO edits are
+   textured; "is this region preserved" may be a very different question there.
+   **Re-run this on real edits as the first thing in the pilot.**
+2. **Only `noise` was tried.** `remove` and `blur` are structurally different
+   damage. `smoke_judge --corruption remove|blur|jpeg`.
+3. **`phi = min(success, preserve)` hides which axis moved.** Corruption should
+   hit `preserve` while `success` stays high — the edit still follows the
+   instruction, it is just damaged. `smoke_judge` now prints both separately.
+   If `preserve` never moves, that is the specific finding.
+
+If it survives all three, it is a genuine and reportable result — a per-region
+reward that is insensitive to per-region damage is exactly the failure this
+project set out to look for. But it needs real data behind it.
+
+### Free exploitability data point
+
+The judge scores an edit **it was shown no images of** — text-only returns all
+25s. Worth a line in the report.
 
 ## Open TODOs
 
