@@ -257,7 +257,28 @@ it — a failure there must not block the other four VMs.
   `stage3_judge.py` is verified as far as synthetic data can take it.
 - `stage4_analyze.py` — logic is straightforward but has never seen real data.
 
-## BLOCKER — the judge shows no image sensitivity yet
+## BLOCKER (cause found, fix landed, awaiting re-test)
+
+**Status 2026-08-25:** the vision path is confirmed working and the placeholder
+prompt was the cause. The real A.4.3 prompt is now in. Re-run `smoke_judge` to
+confirm the gap appears; until it does, do not generate data.
+
+The diagnostic that settled it — same images, plain question instead of the
+scoring prompt, temperature 0:
+
+```
+second image is the RED edit  -> 'red'    (correct)
+second image is the BLUE copy -> 'blue'   (correct)
+```
+
+So the model reads the images, distinguishes them, and answers correctly.
+Anything degenerate from here is prompt or judge behaviour, **not plumbing** —
+don't go looking at the harness again. The evidence below is what the
+*placeholder* produced and is kept only as the before-picture.
+
+---
+
+### The failure, with the placeholder prompt
 
 `smoke_judge.py` on 2026-08-25, Qwen3-VL-8B, **placeholder prompt**:
 
