@@ -73,7 +73,13 @@ def load_engine(model: str, max_len: int = 8192, util: float = DEFAULT_GPU_UTIL)
         dtype="bfloat16",
         max_model_len=max_len,
         gpu_memory_utilization=util,
-        limit_mm_per_prompt={"image": 2},
+        # "video": 0 is load-bearing, not tidiness. Qwen3-VL accepts video, and
+        # if the limit is left unset vLLM sizes the encoder cache for a
+        # maximum-length video and profiles with one — a 151250-token budget and
+        # a 4.62GiB allocation on top of 16.8GiB of weights, which OOMs the A10
+        # during profile_run before a single request is served. We only ever
+        # send two images.
+        limit_mm_per_prompt={"image": 2, "video": 0},
         mm_processor_kwargs={"max_pixels": MAX_PIXELS, "min_pixels": MIN_PIXELS},
         # enforce_eager=True,   # uncomment if CUDA graph capture OOMs on the vGPU
     )
