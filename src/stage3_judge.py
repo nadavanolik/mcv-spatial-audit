@@ -91,7 +91,7 @@ def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL)
         # the profiling activation peak from it; our prompts are ~1,750 tokens
         # (2 images ~750 each + ~250 of text), so 4096 is ample headroom and
         # halves the peak that was pushing the KV cache negative.
-        max_num_batched_tokens=4096,
+        max_num_batched_tokens=2048,
         # Eager, not CUDA graphs. Graph capture reserves memory this card does
         # not have to spare, and it costs ~37s of torch.compile at every engine
         # start. The throughput it buys is almost all on the decode side, and
