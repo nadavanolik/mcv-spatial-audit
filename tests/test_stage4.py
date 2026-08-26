@@ -244,13 +244,34 @@ def main() -> int:
     ok &= check("phi keeps all of them", len(usable(holed, "phi")) == len(holed))
 
     print("\n" + "=" * 68)
+    print("8b. FLOOR FILTER drops only regions whose CLEAN control is at the floor")
+    print("=" * 68)
+    # A region already scored 0 on the clean edit cannot drop when damaged, so
+    # it contributes a guaranteed zero delta to both classes and drags AUROC
+    # toward 0.5. Dropping it must remove exactly those rows and nothing else --
+    # a filter that took out real regions would manufacture the result it is
+    # supposed to be measuring.
+    from src.stage4_analyze import drop_floored  # noqa: E402
+    dd = delta_table(usable(df, "phi"), "phi")
+    dd.loc[dd.index[:40], "ctrl_score"] = 0.0
+    kept = drop_floored(dd, 0.0)
+    ok &= check("dropped exactly the floored rows",
+                len(kept) == len(dd) - 40, f"{len(kept)} of {len(dd)}")
+    ok &= check("every surviving row is above the threshold",
+                bool((kept.ctrl_score > 0).all()))
+    ok &= check("a threshold below the minimum keeps everything",
+                len(drop_floored(dd, -1.0)) == len(dd))
+    ok &= check("the filter does not add or reorder columns",
+                list(kept.columns) == list(dd.columns))
+
+    print("\n" + "=" * 68)
     print("9. THE CLI RUNS END TO END and writes every artefact")
     print("=" * 68)
     outdir = tmp / "analysis"
     r = subprocess.run(
         [sys.executable, "-m", "src.stage4_analyze",
          "--scores", str(tmp / "scores_shard_*.parquet"),
-         "--out", str(outdir), "--all-readouts"],
+         "--out", str(outdir), "--all-readouts", "--min-control", "0"],
         cwd=str(Path(__file__).resolve().parents[1]),
         capture_output=True, text=True,
     )
