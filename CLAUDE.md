@@ -758,5 +758,19 @@ Things that should trigger an update: a pilot or `main` result, a decision from
 the "DECIDE FIRST" list being made, a VM reporting its determinism hash, or any
 finding being retired the way "semantic yes, photometric no" was.
 
-The same content lives in `TEAM_BRIEF.md`; keep the two consistent, and prefer
-the brief for anything a teammate needs to copy-paste on a VM.
+## The three docs have different jobs — keep them separate
+
+They drifted into near-duplicates once and had to be pulled apart. Before adding
+anything, decide which one it belongs in:
+
+| | Audience | Contains | Does NOT contain |
+|---|---|---|---|
+| `README.md` | anyone who opens the repo | what the project is, layout, requirements, installation, pipeline, usage, testing, reproducibility caveats | findings, assignments, timeline, status |
+| `TEAM_BRIEF.md` | the four other students | plain-language explanation, current status, what the pilot found, **their missions**, decisions to make together, VM gotchas, timeline | setup commands (link to README), implementation detail, measurement tables |
+| `CLAUDE.md` | future Claude Code sessions | everything measured, every retired hypothesis, why each decision was made, what not to re-litigate | anything a human needs to copy-paste |
+
+`TEAM_BRIEF.md` is deliberately the *simplest* of the three: short paragraphs,
+no jargon, missions up front. Do not push measurement tables or implementation
+detail into it — those belong here. A number reaches the brief only in the form
+a teammate would repeat out loud ("53-80% of damaged regions score identically",
+not "ties 0.811 / 0.722 on phi").

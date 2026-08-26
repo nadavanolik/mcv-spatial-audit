@@ -1,317 +1,192 @@
-# Team brief — where we are and what's next
+# Team brief
 
-Updated 2026-08-26.
+Updated 2026-08-26. Start here — this is the plain-language version.
+Setup commands, repo structure and constraints live in [`README.md`](README.md).
 
-Short version: **the pipeline runs end to end on real data, and the go/no-go
-pilot returned GO.** All five stages, 100% parse, 100% region coverage. On five
-images the judge's per-region score behaves like one whole-image judgement
-copied across region slots — which is exactly the failure this project set out
-to look for. What's left is running it at scale and writing it up.
+---
 
-## What we're actually testing (refresher)
+## What we're doing, in one page
 
-RL methods for image editing used to score the whole edited image with one
-number. That's a bad training signal when one instruction contains three jobs —
-if the model nails the car and botches the sunglasses, a single mediocre score
-tells it nothing about which part to fix.
+When an AI edits an image, someone has to score how well it did. Older methods
+gave one number for the whole picture. That's a weak teaching signal: if the
+instruction was "make the car red, remove the bottle, age the person" and the
+model nails two and botches one, a single mediocre score doesn't say which.
 
-The recent papers fix this by asking a VLM judge to score each region
-separately. Our question: **is the per-region score actually about that region?**
-Or is the judge forming a whole-image impression and writing roughly the same
-number next to every region label?
+The 2026 papers fix this by asking a vision-language model to score **each
+region separately**. Four papers now build on that idea.
 
-Our test: corrupt exactly one region of an edited image, then ask the judge to
-score every region. We know where the damage is because we put it there. Three
-things can happen:
+**Our question: is the per-region score really about that region?** Or is the
+judge forming a general impression of the whole picture and writing more or less
+the same number beside every region label?
 
-- only the corrupted region's score drops → the signal is real
-- every region's score drops → it's the global score in disguise
-- the wrong region's score drops → the credit is misplaced
+**How we test it.** Take an edited image. Deliberately damage exactly one
+region. Ask the judge to score all of them. We know where the damage is because
+we put it there. Three things could happen:
 
-Which one we observe is the result. Either answer is publishable: we either
-validate an assumption four papers rest on, or find a hole in it.
+- only the damaged region's score drops → the signal is real
+- every region's score drops → it's a whole-image score in disguise
+- the wrong region's score drops → the credit lands in the wrong place
 
-## The design, in one idea
+Whichever we see is the result. Either way it's publishable: we confirm an
+assumption four papers rest on, or we find a hole in it.
 
-We can't pass gigabytes of images between five disconnected machines with 90G
-disks each. But corrupting a region is a *deterministic* operation — same image,
-same mask, same seed, same output bytes. So each VM regenerates only its own
-share locally, into RAM.
+**Why the pipeline looks the way it does.** Our five VMs can't share files and
+have small disks, so we can't pass gigabytes of damaged images around. But
+damaging a region is *deterministic* — same image, same mask, same seed, same
+bytes out. So each VM regenerates only its own share locally. Only ~300MB of
+edited images ever moves between machines, once, at the start.
 
-What actually moves between machines: ~300MB of base edited images (once, ever)
-plus a few MB of manifests and scores. That's it.
+That only works if every machine produces **byte-identical** damage. Hence the
+hash check below.
 
-This only works if the corruption is byte-identical everywhere, so there's a
-test suite enforcing it and a script that prints a hash we all need to match.
-Two VMs have confirmed `776feeddd281fa726195bf504c7b19c8`. **Three still need
-to.**
+---
 
-## What is done and verified
+## Where we are
 
-Everything below has actually been executed, not just written.
+**The pipeline works end to end, and the go/no-go pilot said GO.**
 
-- **Stage 0 (COCO filter).** 187 of val2017's 5,000 images qualify (3–5
-  distinct instructable categories at 2–25% area), mean 3.19 regions each. That
-  covers `main`'s 100 bases with room to spare. `--survey` reports this from the
-  annotations file alone, before you download any images.
-- **Stage 1 (FLUX Kontext editing).** Works. 189s/image. The edit follows the
-  instruction and mostly leaves other regions alone. 5 pilot bases are edited.
-- **Stage 2 (corruption).** 75 pilot variants rendered from real edits in 3s.
-- **Stage 3 (vLLM judging).** 100% parse rate, 100% region coverage.
-  **2.84s/request** at greedy; 7.9s/request at `n=5 @ T=0.7`.
-- **Stage 4 (analysis).** Migrated to the real score columns and verified
-  against three synthetic judges with known behaviour.
-- **The A.4.3 prompt is in, verbatim.** No longer a placeholder.
+All five stages run on real data: COCO filtering → editing with FLUX → damaging
+one region → judging with Qwen3-VL-8B → analysis. 100% of judge responses parse
+and every region gets scored.
 
-## PILOT VERDICT (2026-08-26): GO
+### What the pilot found
 
-5 bases, 75 variants, `[none, blur, remove]`, greedy decoding. Parse 100%.
+On 5 images we damaged one region at a time and watched the scores.
 
-**First we checked the damage was real** — nobody had, and "the judge ignored
-it" only means something if there was something to ignore. Measured in 8-bit
-levels, inside vs outside the target mask:
+**First we checked the damage was actually visible** — "the judge ignored it"
+only means something if there was something to ignore. It was: the damaged
+region changed by 8–36 brightness levels out of 255, while everything outside it
+changed by ~0. Obvious damage, precisely confined.
 
-| corruption | inside | outside | masked pixels changed |
-|---|---|---|---|
-| blur s1 | 7.60 | 0.042 | 39% |
-| blur s3 | 21.87 | 0.110 | 79% |
-| remove s1 | 35.01 | 0.001 | 78% |
-| remove s3 | 35.52 | 0.001 | 83% |
+**Then, three things that all say the same thing:**
 
-179x to 25,000x contrast. The damage is obvious and confined to the region we
-targeted — which also confirms, on real edits, the assumption the whole leakage
-analysis rests on.
+1. **The score usually doesn't move at all.** 53–80% of damaged regions get a
+   score *identical* to the undamaged version.
+2. **When it does move, it isn't the damaged region.** A region we damaged is no
+   more likely to change than one we never touched.
+3. **The judge changes its mind about the whole image at once.** If it scored
+   regions independently we'd expect ~67% of cases where some regions move and
+   others hold. We see 27%.
 
-**Then, three readings that agree:**
+Put together: **the "per-region" score looks like one whole-image judgement
+copied into each region slot** — exactly the failure we set out to look for.
 
-1. **The score usually doesn't move.** 53–80% of damaged regions get a score
-   *identical* to their clean control. Greedy decoding, so not sampling noise.
-2. **When it moves, it isn't the damaged region.** The share unchanged is the
-   same for damaged and untouched regions — equal to three decimals in three of
-   four cells.
-3. **The judge revises the whole image at once.** Only 27% of variants show
-   some regions moving while others hold, against 67% expected if regions moved
-   independently. Backed by leave-one-out R² of 0.52–0.56.
+### The honest caveat
 
-AUROC came out 0.45–0.47, but that's a *consequence*, not the finding — AUROC
-is 0.5 both for a judge that never reacts and one that reacts at random.
+**This is five photographs.** It's internally consistent and it looks
+convincing, but five images is a pilot, not a result. The full run uses 100
+images and gives ~21× the data. Nobody should quote these numbers as final.
 
-**Caveats, and they matter:** this is **5 photographs**. The 90 rows per
-severity come from five images, so the effective sample is 5, not 90. Only
-`blur` and `remove` were tested, one judge, one family. `main` lifts it to 319
-per cell — a 21x power increase.
+---
 
-## What we learned the hard way (read this before touching the VMs)
+## YOUR MISSIONS
 
-Each of these cost real time and is now handled in code — but you'll hit the
-symptoms if you deviate.
+### Everyone: send Nadav your determinism hash
 
-- **FLUX needs `--offload sequential`, not model-level.** Its transformer is
-  23.8GB in bf16 and an A10-24Q leaves only 21.37GiB free. Model-level offload
-  OOMs before step 1 of 28. This is VRAM, not disk — clearing the cache or
-  unloading a judge changes nothing.
-- **`torch` must be a cu128 build.** `pip install torch` resolves to a CUDA 13
-  wheel, and our driver caps at 12.8; torch then reports "no CUDA device" and
-  hides the reason in a warning. Use
-  `pip install torch --index-url https://download.pytorch.org/whl/cu128`.
-- **`--gpu-util` has a narrow two-sided window, ~(0.861, 0.901).** Too high and
-  vLLM won't start; too low and the KV cache is sized *negative*. The default is
-  0.89. **All five VMs must use the same value** — it changes batch composition,
-  which can perturb logits.
-- **The judge's output must be schema-constrained.** Left free it drops regions
-  and omits `background`, covering only ~43% of what we asked for — while
-  reporting a healthy parse rate. It also falls into verbatim repetition loops
-  that run to the token cap mid-JSON.
-- **Never put `maxLength` in the schema.** It makes xgrammar count characters
-  and costs **7.5×** for no quality gain.
+**~10 minutes. No GPU needed. Three of five VMs still owe this.**
 
-## Roles
-
-| Role | Status / next task |
-|---|---|
-| **Editor VM** | Stage 0 + 1 **working**; 5 of 100 bases edited. Next: edit the remaining 95 (~5h), tar `data/bases`, upload to HF Hub. **Everyone else is blocked on that tarball.** |
-| **Judge harness** | vLLM + Qwen3-VL-8B **working**, real A.4.3 prompt, schema-constrained, 100% parse. Next: decide the sampling config (see Open decisions). |
-| **Corruption + manifest** | Determinism confirmed on 2 of 5 VMs. Next: get the other three to print the hash. Own `config.yaml`. |
-| **Analysis** | `stage4_analyze.py` migrated, tested, and run on real pilot data. Next: figures. The tie-rate and coherence tables are the headline ones, not AUROC. |
-| **Second judge** | Qwen3-VL-4B is downloaded and runs. Next: pick a second *family* (not just scale) and justify it. |
-
-## ACTION REQUIRED: send Nadav your determinism hash
-
-**Who:** everyone whose VM has not reported a hash yet. Two of five have.
-**Time:** about 10 minutes, most of it waiting on `pip`.
-**Needs a GPU:** no. This is a pure CPU check.
-
-### Why you are being asked
-
-Corrupted image variants are never copied between our VMs — each machine
-regenerates its own share locally from the same seed. That only works if the
-corruption code produces **byte-identical** output everywhere. If your machine
-disagrees with mine by one pixel, scores from your shard cannot be compared
-with scores from mine, and every number in the report is meaningless.
-
-Nobody can tell this went wrong by looking at the results. That is why we check
-it up front.
-
-### Step by step
-
-**1. Start your VM** from the Azure portal and wait for it to report *Running*.
-
-**2. SSH in** from your own machine, substituting your VM's name:
+Why it matters: if your machine's damaged images differ from mine by even one
+pixel, your results can't be combined with mine — and nothing downstream would
+reveal it.
 
 ```bash
-ssh student@mcvgpu2025s-00XX
-```
-
-If you do not know the hostname or password, ask in the group — they were
-issued with the VM.
-
-**3. Clone the repo** (skip if you already have it):
-
-```bash
-cd ~
-git clone https://github.com/nadavanolik/mcv-spatial-audit.git
+ssh student@mcvgpu2025s-00XX          # your VM
+cd ~ && git clone https://github.com/nadavanolik/mcv-spatial-audit.git
 cd mcv-spatial-audit
+python -m venv .venv && source .venv/bin/activate
+bash scripts/setup.sh judge           # or `core` if you only want the hash
 ```
 
-If you already cloned it earlier, do this instead so you are on current code:
+Already cloned it? `cd ~/mcv-spatial-audit && git pull` instead of cloning.
 
-```bash
-cd ~/mcv-spatial-audit && git pull
-```
-
-**4. Make a virtual environment and activate it.** Do not install into the
-system Python — we have no sudo, and `setup.sh` will refuse:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-Your prompt should now start with `(.venv)`.
-
-**5. Run setup.** Use `judge` if your VM will run the judge (most of you), or
-`core` if you only want to produce the hash and nothing else:
-
-```bash
-bash scripts/setup.sh judge
-```
-
-This installs dependencies (several minutes — vLLM is large), prints the pinned
-library versions, then runs the determinism tests and the hash check.
-
-**6. Send back the last three lines.** You are looking for output like:
+**Send back two lines** from the output — the `numpy / cv2 / pillow` versions
+and the `CROSS-VM FIXTURE HASH`. It should read:
 
 ```
-host: mcvgpu2025s-00XX
 numpy 1.26.4 cv2 4.11.0 pillow 10.4.0
-...
-all determinism guarantees hold
 CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 ```
 
-**Paste the `numpy/cv2/pillow` line and the `CROSS-VM FIXTURE HASH` line into
-the group.** Both matter — if a hash disagrees, the version line is what tells
-us why.
+- **Matches?** You're done, nothing else needed.
+- **Different hash?** Don't fix it yourself — post it *with* the versions line.
+  It's almost always a library that resolved differently, and we need to see
+  which one.
+- **A test failed?** Post the whole thing. That's a real bug worth finding.
+- **"no virtualenv is active"?** You skipped the `source` line.
 
-### What the answer should be
+### Per-person roles
 
-`776feeddd281fa726195bf504c7b19c8`, on `numpy 1.26.4 / cv2 4.11.0 /
-pillow 10.4.0`.
+| Role | Where it stands | Next |
+|---|---|---|
+| **Editor VM** | stages 0+1 working, 5 of 100 images edited | Edit the remaining 95 (~5h), then `tar czf bases.tar.gz -C data bases` and upload. **Everyone else is waiting on this.** |
+| **Judge harness** | working, 100% parse, real published prompt | Decide the sampling config — decision 1 below |
+| **Corruption + manifest** | determinism confirmed on 2 of 5 VMs | Chase the other three. Own `config.yaml` |
+| **Analysis** | stage 4 runs on real data | Start the figures. The tie-rate and coherence tables are the headline ones, not AUROC |
+| **Second judge** | Qwen3-VL-4B downloaded and working | Pick a second *family*, not just a second size, and justify it |
 
-- **Matches, all tests pass** — you are done, nothing else needed.
-- **Hash differs** — do not "fix" it yourself. Post it with your version line.
-  Almost always a pinned library resolved differently, and we need to see which.
-- **A test fails** — post the whole failure. That is a genuine bug and worth
-  finding.
-- **`setup.sh` says no virtualenv is active** — you skipped step 4, or opened a
-  new shell. Re-run `source .venv/bin/activate`.
-- **Two OpenCV packages warning** — post it. A stray `opencv-python` alongside
-  `opencv-python-headless` is a different library and can change the bytes.
+---
 
-*(For reference: on a Windows laptop the hash is `5073799d…` instead. That is
-expected — different platform, different libjpeg. Only the five Linux VMs need
-to agree with each other.)*
+## Decisions we need to make together
 
-## Setup on a fresh VM (general)
+1. **Sampling config for the main run.** Right now we ask the judge 5 times at a
+   random-ish temperature. That made our first pilot unreadable — the judge
+   disagreed with *itself* by 38% of the scale on identical inputs. Switching to
+   deterministic fixed it, and cut the run from 3.1h to 1.1h per VM. Likely
+   answer: deterministic for the main run, plus a small sampled run to document
+   the instability. **Decide before anyone starts the main run.**
 
-```bash
-git clone <repo> mcv-spatial-audit && cd mcv-spatial-audit
-python -m venv .venv && source .venv/bin/activate
-bash scripts/setup.sh judge          # or editor / coco / core
-```
+2. **`remove` has no severity ladder.** Its "mild" and "severe" settings differ
+   by 0.5 out of 35 — there's no gradient there at all. Either drop it from
+   severity comparisons or redefine what severity means for it.
 
-The editor VM needs its own **second** venv (`.venv-editor`) because diffusers
-and vLLM pin different torch builds — see README.
-
-## Open decisions (nobody has made these yet)
-
-1. **Greedy as the default?** `run_shard.sh` still uses `n=5 @ temperature
-   0.7`. That is what made the first pilot unreadable -- the judge's score
-   moved 38% of the scale across samples of the *same* input. Greedy fixed it
-   and also cut `main` from 3.1h to 1.1h per VM. Likely answer: greedy for
-   `main`, plus a small sampled run to characterise the instability. Needs a
-   decision before anyone starts `main`.
-2. **`remove` on the severity axis.** Severity 1 and 3 differ by 0.5 intensity
-   levels out of 35 -- there is no ladder there. Drop it from severity
-   comparisons or redefine severity for it.
-3. **`REMOVE_TEMPLATES` in stage 0.** We generate "remove the X" instructions,
-   which collide with `remove` also being a corruption, and make "was this
-   region preserved" meaningless for a region the instruction deleted.
+3. **"remove the X" instructions in stage 0.** They clash with `remove` also
+   being one of our damage types, and "was this region preserved?" is
+   meaningless for a region we told the editor to delete.
 
 ## Two things that must reach the report
 
-- **Pilot numbers rest on 5 photographs.** Effective n is 5, not 90. Say it
-  wherever a pilot number appears.
-- **The sampling instability is a finding in its own right** -- SD 0.363 on a
-  0.959 range across samples of an identical input.
+- **Every pilot number rests on 5 photographs.** Say so wherever one appears.
+- **The judge is unstable across repeated samples** — 38% of the scale on
+  identical input. That's a problem for RL training on its own, separate from
+  whether it localises.
 
-## What's next, in order
+---
 
-1. **Finish the base edits** (editor VM, ~5h for the remaining 95). Everything
-   downstream waits on this.
-2. ~~Run the pilot~~ **DONE — verdict GO, see above.**
-3. **Cross-VM hash from the remaining three machines.**
-4. **`main` run**: **~1.1h/VM** at greedy, sharded five ways.
-5. Second judge family; nuisance + exploitability tests; figures; LaTeX.
+## Gotchas if you're touching a VM
 
-## The question we thought was open — answered, and the answer was no
+All handled in the code, but you'll hit the symptoms if you deviate:
 
-**This is resolved. It was the top risk for a week and the pilot closed it.**
+- **`pip install torch` gives you a broken build.** It fetches CUDA 13; our
+  driver caps at 12.8, and torch then claims there's no GPU at all. Use
+  `--index-url https://download.pytorch.org/whl/cu128`.
+- **Don't set `HF_HOME`.** A non-default path gives you a second empty cache and
+  re-downloads models you already have until the disk fills.
+- **Don't change `--gpu-util`.** 0.89 sits in a narrow window — both higher and
+  lower fail — and all five VMs must use the same value.
+- **Stage 1 needs sequential offload.** FLUX doesn't fit otherwise, and this is
+  a VRAM limit, so freeing disk space won't help.
 
-On synthetic squares the judge dropped 10 points for `remove` and did not move
-*at all* for blur, JPEG or noise. That suggested the reward tracks **semantic**
-change (an object is gone) while being blind to **photometric** degradation
-(the object is still there, just damaged). It would have been a clean finding.
+## A question we closed
 
-**It did not replicate on real photographs.** From the pilot's sensitivity
-table, share of damaged regions whose score dropped:
+We thought we'd found something: on synthetic test images the judge noticed when
+an object was *deleted* but ignored it being *blurred*. That would have been a
+clean result — the reward tracks meaning, not quality.
 
-| | blur | remove |
-|---|---|---|
-| severity 1 | 20.0% | **20.0%** |
-| severity 3 | 26.7% | **26.7%** |
-| AUROC | 0.461 | 0.469 |
+**It vanished on real photographs.** Blur and remove produce identical response
+rates (20.0% vs 20.0% at mild, 26.7% vs 26.7% at severe). It was an artefact of
+the fake images. Worth remembering: a synthetic sanity check produced a
+plausible, self-consistent, completely wrong conclusion, and only real data
+caught it.
 
-Identical at matched severities. The judge is equally insensitive to both, so
-there is no semantic/photometric split to report — the synthetic result was an
-artefact of flat, textureless squares, exactly the out-of-distribution confound
-we flagged when we found it.
-
-What replaced it is a better finding: the judge does not respond per region at
-all, for either damage type. See the pilot verdict above.
-
-**Still untested on real data:** `jpeg`, `noise` and `saturate` — the pilot only
-ran `[none, blur, remove]`. `main` includes all five, so the split gets a second,
-properly powered look. Do not assume it stays closed until then.
+---
 
 ## Timeline to 30.9
 
-- **Week 1 — done.** Setup, pipeline verified end to end, harness bugs fixed.
-- **Week 2** — 100 bases edited and shipped; manifest frozen; localization +
-  redundancy on `main`.
+- **Week 1 — done.** Setup, pipeline verified, pilot, go/no-go. Verdict GO.
+- **Week 2** — 100 images edited and shipped; manifest frozen; main run.
 - **Week 3** — second judge family; nuisance + exploitability tests.
 - **Week 4** — figures, LaTeX, repo cleanup.
 - **Week 5** — buffer and the 5-minute talk. Don't plan work here.
 
-The "Optimal Reward ∆" stretch goal from the proposal is out of scope unless
-week 3 finishes early.
+The "Optimal Reward ∆" stretch goal is out of scope unless week 3 finishes
+early.
