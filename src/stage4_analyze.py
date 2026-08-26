@@ -98,6 +98,59 @@ def noise_floor(df: pd.DataFrame, col: str) -> pd.DataFrame:
     return g.groupby("judge").sd.agg(["mean", "median", "max"]).reset_index()
 
 
+def measurement_quality(df: pd.DataFrame, col: str, nf: pd.DataFrame) -> None:
+    """Can this data detect an effect at all? Print before interpreting anything.
+
+    Two ways the answer is no, both seen on the first real pilot:
+
+    RAILS. If the judge mostly emits the extremes (0 or 25), the score is closer
+    to a coin flip than a measurement, and repeated samples of the SAME input
+    land on different rails. That shows up as a huge within-variant SD.
+
+    FLOOR. A region whose CLEAN control already scored 0 cannot go down. Damaging
+    it is uninformative by construction, and including it dilutes every average
+    toward zero. This is a property of our data, not the judge: FLUX does not
+    always execute the instruction, so some regions are legitimately 0 before we
+    touch them.
+    """
+    print("\n=== measurement quality (read this before any result below) ===")
+    v = df[col].dropna()
+    if v.empty:
+        print("  no values")
+        return
+    lo, hi = float(v.min()), float(v.max())
+    rng = hi - lo
+    rail = float(((v <= lo + 1e-9) | (v >= hi - 1e-9)).mean())
+    print(f"  {col}: range {lo:.3f}-{hi:.3f}, {rail:.1%} of values sit on a rail")
+
+    floor = float(nf["median"].max()) if len(nf) else float("nan")
+    if rng > 0 and floor == floor:
+        print(f"  noise floor {floor:.3f} = {floor / rng:.1%} of that range")
+        print(f"  smallest detectable effect ~{2 * floor:.3f} "
+              f"({2 * floor / rng:.1%} of range)")
+        if floor > 0.15 * rng:
+            print("  WARNING: the floor is a large fraction of the range. Repeated")
+            print("  samples of the SAME input disagree that much, so nothing")
+            print("  smaller can be resolved. Lower the sampling temperature")
+            print("  before reading any AUROC below as a property of the judge.")
+        elif floor == 0:
+            print("  Floor is exactly 0 -- greedy decoding, so within-variant SD is")
+            print("  NOT a usable denominator. Judge effects against the spread")
+            print("  ACROSS variants instead; see the between-variant SD below.")
+
+    # The alternative denominator: how much do clean controls differ from each
+    # other across bases? An effect has to clear this to be interesting.
+    ctrl = (df[df.is_control]
+            .groupby(["base_id", "scored_region_id"])[col].mean())
+    if len(ctrl) > 1:
+        print(f"  between-variant SD of clean controls: {ctrl.std():.3f}")
+
+
+def floor_fraction(d: pd.DataFrame, thresh: float) -> str:
+    keep = (d.ctrl_score > thresh).mean() if len(d) else float("nan")
+    return f"{keep:.1%}"
+
+
 def delta_table(df: pd.DataFrame, col: str) -> pd.DataFrame:
     """delta = corrupted - matching clean control, per (base, scored region).
 
@@ -119,6 +172,23 @@ def delta_table(df: pd.DataFrame, col: str) -> pd.DataFrame:
     out["delta"] = out.score - out.ctrl_score
     out["is_target"] = out.scored_region_id == out.target_region_id
     return out
+
+
+def drop_floored(d: pd.DataFrame, thresh: float) -> pd.DataFrame:
+    """Keep only regions whose CLEAN control scored above `thresh`.
+
+    A region already at the bottom on the clean edit cannot drop further when we
+    damage it, so it contributes a guaranteed zero delta to both classes and
+    pulls AUROC toward 0.5 no matter how well the judge localises. Excluding it
+    is not cherry-picking: it is refusing to ask a question the scale cannot
+    answer. Say in the report how many regions this removed and at what
+    threshold.
+    """
+    before = len(d)
+    d = d[d.ctrl_score > thresh].copy()
+    print(f"  --min-control {thresh}: kept {len(d)}/{before} rows "
+          f"({len(d) / max(before, 1):.1%})")
+    return d
 
 
 def localization(d: pd.DataFrame) -> pd.DataFrame:
@@ -229,6 +299,12 @@ def main():
     ap.add_argument("--out", default="out/analysis")
     ap.add_argument("--col", default="reward", choices=READOUTS,
                     help="headline readout (default: reward, Equation 3)")
+    ap.add_argument("--min-control", type=float, default=None,
+                    help="drop regions whose CLEAN control scored at or below "
+                         "this. A region already at the floor cannot drop when "
+                         "damaged, so it forces AUROC toward 0.5 regardless of "
+                         "how well the judge localises. Try 0 for reward, or 0 "
+                         "for phi/sc_* on the 0-25 scale.")
     ap.add_argument("--all-readouts", action="store_true",
                     help="run localization for every readout in READOUTS - the "
                          "success/preserve split is the diagnostic for a judge "
@@ -251,6 +327,7 @@ def main():
 
     head = usable(df, a.col)
     nf = noise_floor(head, a.col)
+    measurement_quality(head, a.col, nf)
     print(f"\n=== noise floor, {a.col} (SD across repeats, clean controls) ===")
     print(nf.to_string(index=False) if len(nf) else "  no controls found")
     nf.to_csv(out / "noise_floor.csv", index=False)
@@ -261,11 +338,15 @@ def main():
     ax.to_csv(out / "axis_by_severity.csv", index=False)
 
     d = delta_table(head, a.col)
+    if a.min_control is not None:
+        d = drop_floored(d, a.min_control)
     d.to_parquet(out / "deltas.parquet")
 
     print("\n=== localization AUROC by severity ===")
     for c in cols:
         dc = d if c == a.col else delta_table(usable(df, c), c)
+        if a.min_control is not None and c != a.col:
+            dc = drop_floored(dc, a.min_control)
         loc = localization(dc)
         if len(loc):
             loc.insert(0, "readout", c)
@@ -301,7 +382,16 @@ def main():
     for judge, g in d[d.is_target].groupby("judge"):
         eff = abs(g.delta.mean())
         f = floor.get(judge, float("nan"))
-        verdict = "ABOVE noise" if eff > f else "BELOW NOISE - not a signal"
+        if f == 0:
+            # Greedy decoding: repeated samples are identical, so a zero SD says
+            # nothing about whether the effect is real. Declaring "ABOVE noise"
+            # here would be an artefact of the sampling config, not a result.
+            verdict = ("floor is 0 (greedy) - within-variant SD cannot judge "
+                       "this; compare against the between-variant SD above")
+        elif eff > f:
+            verdict = "ABOVE noise"
+        else:
+            verdict = "BELOW NOISE - not a signal"
         print(f"{judge}: |mean delta|={eff:.4f} vs floor={f:.4f}  -> {verdict}")
 
 
