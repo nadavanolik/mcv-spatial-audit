@@ -102,10 +102,18 @@ def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL)
     try:
         return _build_engine(model, max_len, util)
     except (RuntimeError, ValueError) as e:
-        # vLLM's own message says "try increasing gpu_memory_utilization",
+        # The engine runs in a CHILD process, so any startup failure reaches us
+        # as the same generic "Engine core initialization failed" -- the real
+        # cause is only in the child's traceback above. This handler once
+        # reported a KV-cache problem for a disk-full OSError during a weight
+        # download, sending the reader after GPU memory for a storage bug.
+        #
+        # So: name the KV cause only when the child's own words are present.
+        # vLLM's message there says "try increasing gpu_memory_utilization",
         # which is correct but sounds like advice to raise a value you lowered
-        # deliberately. Say which direction and why, with the numbers.
-        if "cache blocks" in str(e) or "Engine core initialization failed" in str(e):
+        # deliberately -- hence spelling out the direction and the numbers.
+        msg = str(e)
+        if "cache blocks" in msg or "No available memory" in msg:
             raise SystemExit(
                 f"vLLM could not allocate a KV cache at --gpu-util {util}.\n"
                 f"On an A10-24Q the workable window is roughly "
@@ -116,6 +124,20 @@ def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL)
                 f"Retry with --gpu-util {DEFAULT_GPU_UTIL} (the default), and "
                 f"make sure every VM uses the same value.\n"
                 f"Original error: {e}"
+            ) from e
+        if "Engine core initialization failed" in msg:
+            raise SystemExit(
+                "The vLLM engine failed to start. The real error is in the "
+                "child process traceback ABOVE this line; it is not repeated "
+                "here.\n"
+                "Common causes on this hardware, in the order they have "
+                "actually happened:\n"
+                "  - disk full while downloading weights "
+                "(OSError: No space left on device). Check `df -h ~`.\n"
+                f"  - KV cache too small: see --gpu-util (default "
+                f"{DEFAULT_GPU_UTIL}, window ~({GPU_UTIL_FLOOR}, 0.90)).\n"
+                "  - another process holding the GPU. Check `nvidia-smi`.\n"
+                f"Wrapper error: {e}"
             ) from e
         raise
 
