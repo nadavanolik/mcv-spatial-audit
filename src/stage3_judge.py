@@ -288,7 +288,7 @@ def _structured_kwargs(kind: str, schema: dict) -> dict:
 
 
 def run(llm, msgs, meta, n_samples: int, temperature: float,
-        structured: bool = True, reasoning: str = "bounded") -> pd.DataFrame:
+        structured: bool = True, reasoning: str = "free") -> pd.DataFrame:
     from vllm import SamplingParams
 
     # n=n_samples shares the prefill across all samples. With images, prefill
@@ -515,11 +515,13 @@ def main():
     ap.add_argument("--gpu-util", type=float, default=DEFAULT_GPU_UTIL,
                     help=f"gpu_memory_utilization (default {DEFAULT_GPU_UTIL}); "
                          "all five VMs must pass the same value")
-    ap.add_argument("--reasoning", default="bounded", choices=REASONING_MODES,
-                    help="how the schema expresses the free-text reasoning "
-                         "field: bounded (maxLength), free (unbounded string), "
-                         "or none (omit it). Grammar cost dominates the run, "
-                         "and this is the only unbounded construct in it.")
+    ap.add_argument("--reasoning", default="free", choices=REASONING_MODES,
+                    help="how the schema expresses the reasoning field. "
+                         "free (default) is 7.5x faster than bounded at "
+                         "identical parse and coverage; bounded's maxLength "
+                         "makes xgrammar count characters and costs 58.9s per "
+                         "request against 7.9s. none drops the field, which "
+                         "A.4.3 asks for -- state it in the report if used.")
     ap.add_argument("--no-structured", action="store_true",
                     help="disable JSON-schema-constrained decoding. Only for "
                          "measuring what the constraint is worth -- "

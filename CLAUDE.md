@@ -282,35 +282,35 @@ overall / PQ all 100%**, responses down to a 240-token mean.
 `scripts/diagnose_parse.py` reads a scores parquet on CPU and classifies every
 response; run it after any judge change.
 
-**OPEN: throughput. The grammar is the bottleneck, NOT batching.** Three
-measurements, 20 requests each, settle it:
+**RESOLVED: throughput.** The grammar was the bottleneck, and inside the
+grammar it was one keyword. Four configurations, 20 requests each:
 
-| config | concurrency | total | out tok/s |
-|---|---|---|---|
-| 8B constrained, mml 4096 | 1.24x | 1178s | 13.5 |
-| 4B constrained, mml 2560 | **26.22x** | **1150s** | 14.1 |
-| 8B **unconstrained**, mml 4096 | 1.24x | **57s** | **265.9** |
+| reasoning mode | s/req | vs bounded | `main` h/VM | parse | coverage |
+|---|---|---|---|---|---|
+| `bounded` (maxLength) | 58.90 | 1.0x | 22.97 | 100% | 100% |
+| **`free` (plain string)** | **7.85** | **7.5x** | **3.06** | **100%** | **100%** |
+| `none` (field dropped) | 5.15 | 11.4x | 2.01 | 100% | 100% |
+| no schema at all | 2.85 | 20.7x | 1.11 | 100% | **~43%** |
 
-**26x the concurrency bought 2%.** A 4B judge does not fix throughput, and this
-file asserted that it would from before any of it was measured — the 4B run is
-what disproved it. Constrained decoding is **21x**, and that is the whole gap.
-Unconstrained, `main` is **1.1h/VM and inside budget**; constrained it is 23h.
+**`maxLength` cost 7.5x for nothing.** A length bound makes xgrammar track a
+character counter, which multiplies FSM states; removing it left parse rate and
+region coverage both at 100% (50 responses, mean 333 tokens against a 1536
+cap). `free` is now the default.
 
-But unconstrained is not an option on quality: it parses (with
-`repetition_penalty` 1.1) yet region coverage was only ~43%, because the judge
-silently drops regions and omits `background`/`overall_score`.
+Two things this corrects:
+- **Batching was never the constraint.** A 4B judge with **26.22x** the
+  concurrency finished **2% faster** than the 8B at 1.24x. This file called a
+  4B judge "the structural fix" long before anything was measured; it is not.
+  It remains worth running as a cross-scale comparison (TODO 2), just not for
+  speed.
+- **Dropping the schema is not an option.** Unconstrained parses fine but
+  covers only ~43% of regions, because the judge silently omits regions and
+  `background`/`overall_score`. Speed there is bought with missing data.
 
-The only unbounded construct in the grammar is the free-text `reasoning`
-string, and `maxLength` is the prime suspect — a length bound makes xgrammar
-track a character counter, multiplying FSM states. `--reasoning
-{bounded,free,none}` exists to attribute that cost rather than guess it.
-Sequence to run: `free` (drops maxLength, keeps the field), then `none` (drops
-the field entirely — fastest, but A.4.3 asks for reasoning BEFORE the scores
-and reasoning-first plausibly changes the score, so it audits a modified
-protocol and must be stated in the report).
-
-If neither recovers the speed, the fallback is a coarser design: fewer
-`n_samples`, or `main` at a lower `n_bases`.
+`main` now projects to **~3.1h/VM** against the proposal's 1.2h estimate. That
+is a one-time overnight run across five VMs in parallel, so it is a schedule
+note rather than a blocker; `n_samples` 5 -> 3 would bring it to ~1.8h if it
+ever needs to fit, at the cost of a noisier noise floor.
 
 **Never executed — expect real bugs here:**
 - `stage0_coco.py` — **selection logic is now laptop-tested** by

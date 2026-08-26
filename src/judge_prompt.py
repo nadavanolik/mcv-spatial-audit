@@ -148,12 +148,17 @@ _SCORE_PAIR = {
 # output tok/s), while a 4B model with 26x the concurrency was 2% faster --
 # so the mask computation, not batching, is the whole bottleneck.
 #
-#   bounded  maxLength on the string. Safest against runaway loops, and the
-#            prime suspect for the slowdown: a length bound makes xgrammar
-#            track a character counter, which multiplies FSM states.
-#   free     a plain string. Loops are then held off only by
-#            repetition_penalty and max_tokens.
-#   none     no reasoning field at all. Fastest, and we never read the field --
+#   bounded  maxLength on the string. CONFIRMED as the slowdown: measured
+#            58.9s/request against 7.9s for the identical schema with the bound
+#            removed. A length bound makes xgrammar track a character counter,
+#            which multiplies FSM states. Do not use it.
+#   free     a plain string. THE DEFAULT. 7.5x faster than bounded at
+#            identical quality -- 100% parse and 100% region coverage over 50
+#            responses, mean 333 tokens against a 1536 cap. Loops are held off
+#            by repetition_penalty and disable_any_whitespace rather than by
+#            the grammar, and a loop that slips through simply truncates one
+#            response, which diagnose_parse reports.
+#   none     no reasoning field at all. 11.4x, only 1.5x better than `free` --
 #            but A.4.3 asks for reasoning BEFORE the scores, and reasoning
 #            first plausibly changes the score, so dropping it audits a
 #            modified protocol. State it in the report if used.
@@ -176,7 +181,7 @@ def _with_reasoning(props: dict, required: list, mode: str) -> tuple:
     return props, required
 
 
-def _region_item(region_id: int, mode: str = "bounded") -> dict:
+def _region_item(region_id: int, mode: str = "free") -> dict:
     """One `edit_region` slot, pinned to a single region id."""
     props = {
         "id": {"type": "integer", "const": int(region_id)},
@@ -204,7 +209,7 @@ def _sc_schema_cached(ids: tuple, mode: str) -> dict:
     return _build_sc_schema(list(ids), mode)
 
 
-def sc_json_schema(region_ids, reasoning: str = "bounded") -> dict:
+def sc_json_schema(region_ids, reasoning: str = "free") -> dict:
     """Schema for one SC response scoring exactly `region_ids`."""
     if reasoning not in REASONING_MODES:
         raise ValueError(f"reasoning must be one of {REASONING_MODES}")
@@ -261,7 +266,7 @@ def _bg_item(mode: str) -> dict:
     return {"type": "object", "properties": props, "required": required}
 
 
-def pq_json_schema(reasoning: str = "bounded") -> dict:
+def pq_json_schema(reasoning: str = "free") -> dict:
     props = {"score": _SCORE_PAIR}
     props, required = _with_reasoning(props, ["score"], reasoning)
     return {"type": "object", "properties": props, "required": required}
