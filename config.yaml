@@ -11,10 +11,17 @@
 
 pilot:
   n_bases: 5
-  corruptions: [none, blur]
+  # `remove` is here deliberately. On synthetic squares (2026-08-26) the judge
+  # moved 10 points for `remove` and did not move AT ALL for blur, jpeg or
+  # noise at any severity -- it appears to track semantic change rather than
+  # degradation. A pilot of [none, blur] would therefore have tested only the
+  # corruption we already know is invisible, and returned a flat null that
+  # proved nothing about the pipeline OR the judge.
+  # blur stays as the contrast: photometric damage that should NOT move it.
+  corruptions: [none, blur, remove]
   severities: [1, 3]
   area_bins: [full]
-  # 60 variants -> ~240 requests. Runs in minutes. Validates the judge.
+  # ~80 variants -> ~160 requests. Runs in minutes. Validates the judge.
 
 main:
   n_bases: 100
