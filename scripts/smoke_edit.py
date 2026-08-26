@@ -71,8 +71,13 @@ def main() -> int:
     ap.add_argument("--steps", type=int, default=28)
     ap.add_argument("--guidance", type=float, default=2.5)
     ap.add_argument("--size", type=int, default=448)
-    ap.add_argument("--n-bases", type=int, default=200,
-                    help="extrapolate the wall clock to this many bases")
+    # 100, not 200. config.yaml's `main` profile -- the one sized to the
+    # proposal's budget -- is 100 bases; 200 is `full_cross`, which the
+    # guardrails say not to run casually. Extrapolating to 200 by default made
+    # a perfectly workable 5.3h read as a 10.6h failure.
+    ap.add_argument("--n-bases", type=int, default=100,
+                    help="extrapolate the wall clock to this many bases "
+                         "(100 = config.yaml `main`; 5 = `pilot`)")
     ap.add_argument("--offload", default="sequential",
                     choices=["sequential", "model"],
                     help="sequential is the only mode that fits on a 24GB A10")
@@ -167,14 +172,27 @@ def main() -> int:
     print("5. BUDGET")
     print("=" * 70)
     total_h = dt * a.n_bases / 3600
-    print(f"  {dt:.1f}s/image x {a.n_bases} bases = {total_h:.1f}h "
-          f"on this one VM, single pass")
+    print(f"  {dt:.1f}s/image at {a.steps} steps")
+    for name, n in (("pilot", 5), ("main", a.n_bases), ("full_cross", 200)):
+        h = dt * n / 3600
+        unit = f"{h * 60:.0f} min" if h < 1 else f"{h:.1f}h"
+        print(f"    {name:<11} {n:>4} bases -> {unit}")
     print(f"  peak VRAM {peak:.2f}GiB of 24GB")
+    if peak < 8:
+        # Sequential offload streams at submodule granularity, so the card sits
+        # nearly idle. That headroom is the lever if this ever needs to be
+        # faster: an NF4/int8 transformer is ~6/12GB, fits resident, and drops
+        # the PCIe round trip that dominates the time above. It costs a
+        # bitsandbytes dependency and slightly different edits, so it is only
+        # worth doing if the base count actually demands it.
+        print(f"  note only {peak:.2f}GiB of ~21GiB is in use - sequential "
+              f"offload leaves the card")
+        print(f"       idle. If this needs to be faster, quantize the "
+              f"transformer (NF4 ~6GB)")
+        print(f"       and switch to --offload model; do not just lower steps.")
     if total_h > 8:
-        print(f"  WARNING: {total_h:.1f}h does not fit an overnight run. Lower "
-              f"--steps (28 -> 20 costs little on Kontext), or cut n_bases.")
-    else:
-        print("  Fits an overnight run.")
+        print(f"  WARNING: {total_h:.1f}h for {a.n_bases} bases does not fit "
+              f"an overnight run.")
 
     print(f"\n{'SMOKE PASSED' if ok else 'SMOKE FAILED'}")
     return 0 if ok else 1
