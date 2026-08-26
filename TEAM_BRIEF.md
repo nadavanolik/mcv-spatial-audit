@@ -203,6 +203,28 @@ bash scripts/setup.sh judge          # or editor / coco / core
 The editor VM needs its own **second** venv (`.venv-editor`) because diffusers
 and vLLM pin different torch builds — see README.
 
+## Open decisions (nobody has made these yet)
+
+1. **Greedy as the default?** `run_shard.sh` still uses `n=5 @ temperature
+   0.7`. That is what made the first pilot unreadable -- the judge's score
+   moved 38% of the scale across samples of the *same* input. Greedy fixed it
+   and also cut `main` from 3.1h to 1.1h per VM. Likely answer: greedy for
+   `main`, plus a small sampled run to characterise the instability. Needs a
+   decision before anyone starts `main`.
+2. **`remove` on the severity axis.** Severity 1 and 3 differ by 0.5 intensity
+   levels out of 35 -- there is no ladder there. Drop it from severity
+   comparisons or redefine severity for it.
+3. **`REMOVE_TEMPLATES` in stage 0.** We generate "remove the X" instructions,
+   which collide with `remove` also being a corruption, and make "was this
+   region preserved" meaningless for a region the instruction deleted.
+
+## Two things that must reach the report
+
+- **Pilot numbers rest on 5 photographs.** Effective n is 5, not 90. Say it
+  wherever a pilot number appears.
+- **The sampling instability is a finding in its own right** -- SD 0.363 on a
+  0.959 range across samples of an identical input.
+
 ## What's next, in order
 
 1. **Finish the base edits** (editor VM, ~5h for the remaining 95). Everything

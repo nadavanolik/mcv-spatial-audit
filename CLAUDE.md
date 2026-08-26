@@ -541,6 +541,35 @@ characterise it.
 The pipeline runs end to end on real data. What remains is the experiment, not
 the harness.
 
+**DECIDE FIRST (deferred 2026-08-26, not handled):**
+
+- **Make greedy the default in `run_shard.sh`?** It still runs `n=5 @
+  temperature 0.7`, which is what produced an unreadable pilot: the judge's
+  score varied across samples of an identical input by 38% of the scale, and
+  the floor swamped every effect. Greedy (`--temperature 0 --n-samples 1`) is
+  what made the result legible AND cut `main` from 3.1h to 1.1h/VM. The
+  argument against is that greedy gives no noise-floor estimate, so the answer
+  is probably greedy for the main run plus a small `n=5 @ T=0.7` run on ~10
+  bases purely to characterise the instability. Nobody has decided.
+- **Whether to keep `remove` on the severity axis.** Its severity 1 and 3
+  differ by 0.5 8-bit levels out of 35 -- the ladder is effectively binary.
+  Either drop `remove` from severity comparisons, or change what severity means
+  for it in `corruptions.py`. Leaving it as is means a flat remove-severity
+  response gets read as insensitivity when it is really an absent stimulus.
+- **`REMOVE_TEMPLATES` in stage 0.** Still generates "remove the X"
+  instructions, which collide with `remove` being a corruption, and make
+  "how well is this region preserved" ill-posed for a region the instruction
+  deleted. Raised twice, never decided.
+
+**FOR THE WRITE-UP (do not lose):**
+
+- **Every pilot number rests on 5 photographs.** 90 rows per severity come from
+  five images; the effective independent sample is 5, not 90. Say so explicitly
+  wherever pilot numbers appear.
+- **The temperature-0.7 instability is its own finding.** SD 0.363 on a 0.959
+  range, across samples of an IDENTICAL input. A reward model that unstable is
+  a problem for RL training regardless of whether it localises.
+
 **Do next, in order:**
 1. Editor VM: edit the remaining 95 bases (~5h at 189s each), then
    `tar czf bases.tar.gz -C data bases` and upload. Everything downstream is
