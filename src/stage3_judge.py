@@ -27,7 +27,8 @@ from PIL import Image
 from tqdm import tqdm
 
 from . import judge_prompt
-from .judge_prompt import build_sc_prompt, build_pq_prompt, parse_sc, parse_pq, region_reward
+from .judge_prompt import (build_sc_prompt, build_pq_prompt, parse_sc, parse_pq,
+                           region_reward, sc_json_schema, pq_json_schema)
 from .schema import shard
 
 # 768^2 = 589,824. Chosen to be a no-op on our actual data while shrinking the
@@ -189,7 +190,46 @@ def build_requests(rows: pd.DataFrame, bases: Path, variants: Path) -> tuple[lis
     return msgs, meta
 
 
-def run(llm, msgs, meta, n_samples: int, temperature: float) -> pd.DataFrame:
+def structured_kind() -> str | None:
+    """Which structured-output API the installed vLLM exposes, or None.
+
+    vLLM renamed this: `guided_decoding` (older) became `structured_outputs`
+    (0.11+). Detect rather than assume, because guessing wrong means either a
+    TypeError at request build time or -- worse -- a silently unconstrained run
+    that looks fine until the parse rate comes back at 70%.
+    """
+    try:
+        from vllm import SamplingParams
+    except ImportError:
+        return None
+    names: set = set()
+    for attr in ("__dataclass_fields__", "__struct_fields__"):
+        got = getattr(SamplingParams, attr, None)
+        if got:
+            names |= set(got)
+    if not names:
+        import inspect
+        try:
+            names = set(inspect.signature(SamplingParams).parameters)
+        except (TypeError, ValueError):
+            return None
+    if "structured_outputs" in names:
+        return "structured_outputs"
+    if "guided_decoding" in names:
+        return "guided_decoding"
+    return None
+
+
+def _structured_kwargs(kind: str, schema: dict) -> dict:
+    if kind == "structured_outputs":
+        from vllm.sampling_params import StructuredOutputsParams
+        return {"structured_outputs": StructuredOutputsParams(json=schema)}
+    from vllm.sampling_params import GuidedDecodingParams
+    return {"guided_decoding": GuidedDecodingParams(json=schema)}
+
+
+def run(llm, msgs, meta, n_samples: int, temperature: float,
+        structured: bool = True) -> pd.DataFrame:
     from vllm import SamplingParams
 
     # n=n_samples shares the prefill across all samples. With images, prefill
@@ -213,11 +253,33 @@ def run(llm, msgs, meta, n_samples: int, temperature: float) -> pd.DataFrame:
     # legitimately runs long, and truncation costs the whole response. The
     # ceiling is max_model_len 4096 minus a ~1,750-token prompt, so 1536 still
     # leaves headroom.
-    sp = SamplingParams(
-        n=n_samples, temperature=temperature, top_p=0.95,
-        max_tokens=1536, repetition_penalty=1.05, seed=1234,
-    )
-    outs = llm.chat(msgs, sp)
+    base = dict(n=n_samples, temperature=temperature, top_p=0.95,
+                max_tokens=1536, repetition_penalty=1.1, seed=1234)
+
+    kind = structured_kind() if structured else None
+    if kind:
+        print(f"structured output: {kind} (JSON schema per request)")
+    else:
+        print("WARNING: this vLLM exposes no structured-output API, so "
+              "responses are unconstrained.\n"
+              "         Expect dropped regions, missing background/"
+              "overall_score, and runaway\n"
+              "         `reasoning` loops that truncate mid-JSON. Check the "
+              "parse rate and run\n"
+              "         scripts/diagnose_parse.py before trusting anything.")
+
+    # One SamplingParams per request: the SC schema pins the exact region ids
+    # for that variant, and PQ has a different shape entirely.
+    sps = []
+    for m in meta:
+        kw = dict(base)
+        if kind:
+            schema = (pq_json_schema() if m["kind"] == "pq"
+                      else sc_json_schema(m["region_ids"]))
+            kw.update(_structured_kwargs(kind, schema))
+        sps.append(SamplingParams(**kw))
+
+    outs = llm.chat(msgs, sps)
 
     # SC first: one row per (variant, sample, region), plus a background row.
     # PQ is image-level and merged on afterwards.
@@ -375,6 +437,10 @@ def main():
     ap.add_argument("--gpu-util", type=float, default=DEFAULT_GPU_UTIL,
                     help=f"gpu_memory_utilization (default {DEFAULT_GPU_UTIL}); "
                          "all five VMs must pass the same value")
+    ap.add_argument("--no-structured", action="store_true",
+                    help="disable JSON-schema-constrained decoding. Only for "
+                         "measuring what the constraint is worth -- "
+                         "unconstrained runs drop regions and loop.")
     ap.add_argument("--dry-run", action="store_true",
                     help="build the requests and print the first one, without "
                          "importing vLLM — runs on a machine with no GPU")
@@ -394,7 +460,8 @@ def main():
     print(f"{len(msgs)} requests x n={a.n_samples}")
 
     llm = load_engine(a.model, util=a.gpu_util)
-    res = run(llm, msgs, meta, a.n_samples, a.temperature)
+    res = run(llm, msgs, meta, a.n_samples, a.temperature,
+              structured=not a.no_structured)
     res["judge"] = a.model
 
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)

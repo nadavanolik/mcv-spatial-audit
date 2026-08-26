@@ -116,6 +116,86 @@ def build_pq_prompt() -> str:
     return SFREWARD_PQ_RECONSTRUCTED
 
 
+# Grammar-constrained decoding. Free-running `reasoning` text is what breaks
+# this protocol in practice: on real COCO edits the judge fell into verbatim
+# loops ("a black and white motorcycle with a rider wearing a helmet, " x110)
+# that ran to max_tokens mid-JSON, and separately dropped regions and omitted
+# background/overall_score. 30% of responses parsed as nothing and coverage of
+# the rest was 60%.
+#
+# A schema fixes all three at once: maxLength bounds the loop, minItems/maxItems
+# force every requested region, and `required` forces the two top-level keys.
+#
+# NOTE FOR THE REPORT: this constrains the FORMAT, never the VALUES. Any score
+# in 0-25 remains reachable, so what the judge thinks is unaffected -- only its
+# ability to wander off mid-sentence. A.4.3 asks for a "brief reason" already;
+# this enforces what the prompt requests rather than adding a new demand.
+REASONING_MAXLEN = 200
+
+_SCORE_PAIR = {
+    "type": "array",
+    "items": {"type": "integer", "minimum": SCORE_MIN, "maximum": SCORE_MAX},
+    "minItems": 2, "maxItems": 2,
+}
+
+
+def sc_json_schema(region_ids) -> dict:
+    """Schema for one SC response scoring exactly `region_ids`."""
+    ids = [int(r) for r in region_ids]
+    return {
+        "type": "object",
+        "properties": {
+            "edit_region": {
+                "type": "array",
+                "minItems": len(ids), "maxItems": len(ids),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer", "enum": ids},
+                        "label": {"type": "string", "maxLength": 60},
+                        # Kept optional and unread: A.4.3's output format asks
+                        # for it, but the model answers in its own normalised
+                        # 0-1000 space rather than our pixels, so it is not a
+                        # usable echo of the region we specified.
+                        "bbox_2d": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "minItems": 4, "maxItems": 4,
+                        },
+                        "score": _SCORE_PAIR,
+                        "reasoning": {"type": "string",
+                                      "maxLength": REASONING_MAXLEN},
+                    },
+                    "required": ["id", "score", "reasoning"],
+                },
+            },
+            "background": {
+                "type": "object",
+                "properties": {
+                    "score": {"type": "integer",
+                              "minimum": SCORE_MIN, "maximum": SCORE_MAX},
+                    "reasoning": {"type": "string",
+                                  "maxLength": REASONING_MAXLEN},
+                },
+                "required": ["score", "reasoning"],
+            },
+            "overall_score": _SCORE_PAIR,
+        },
+        "required": ["edit_region", "background", "overall_score"],
+    }
+
+
+def pq_json_schema() -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "score": _SCORE_PAIR,
+            "reasoning": {"type": "string", "maxLength": REASONING_MAXLEN},
+        },
+        "required": ["score", "reasoning"],
+    }
+
+
 def _extract_json(text: str) -> Optional[dict]:
     """Pull the first balanced {...} out of a response that may carry prose."""
     start = text.find("{")
