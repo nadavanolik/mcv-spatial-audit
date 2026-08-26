@@ -172,8 +172,9 @@ each `-r requirements.txt`, so setup is always exactly one install command.
 Don't pin `torch` in the role files — vLLM and diffusers pin the build they were
 compiled against, and a second pin from us produces either a resolver conflict
 or a silently mismatched CUDA build. Don't move `pycocotools` back into core: it
-builds from source, needs a compiler we cannot install, and only stage 0 imports
-it — a failure there must not block the other four VMs.
+only stage 0 imports it, and a failure there must not block the other four VMs.
+(It ships manylinux wheels as of 2.0.11 and needs no compiler; the old "builds
+from source" warning is retired.)
 
 ## Status — what is verified vs what has never run
 
@@ -260,7 +261,7 @@ it — a failure there must not block the other four VMs.
   `tests/test_stage0.py` (2026-08-26), which drives `select`/`write_base` with
   a stub COCO. That was made possible by deleting an `assert isinstance(coco,
   COCO)` whose only effect was to force a `pycocotools` import — a library that
-  compiles from source and cannot be built on the VMs — into the one function
+  only stage 0 needs — into the one function
   carrying the real risk. Still unverified: pycocotools' own API
   (`annToMask`, `getAnnIds(iscrowd=...)`) and, more importantly, **whether
   val2017 even contains 200 qualifying images**. Run `--survey` first; it needs

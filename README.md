@@ -45,7 +45,7 @@ the editor and a judge**:
 | `requirements.txt` | everyone, incl. the no-GPU laptop | numpy/opencv/pillow/pandas/sklearn — pinned, determinism-critical |
 | `requirements-judge.txt` | stage 3 VMs | `vllm` (which pins its own torch) |
 | `requirements-editor.txt` | the one stage 1 VM | `diffusers`, `transformers`, `accelerate` |
-| `requirements-coco.txt` | whoever runs stage 0 | `pycocotools` — builds from source, needs gcc |
+| `requirements-coco.txt` | whoever runs stage 0 | `pycocotools` — ships manylinux wheels; no compiler needed |
 
 Each role file pulls in `requirements.txt`, so you install one thing, not two.
 

@@ -320,10 +320,31 @@ def preflight(root: Path, model_id: str, a) -> int:
     while not probe.exists() and probe != probe.parent:
         probe = probe.parent
     free_gb = shutil.disk_usage(probe).free / 2**30
-    print(f"  {'OK  ' if free_gb >= NEED_GB else 'FAIL'} HF_HOME={hf_home}: "
-          f"{free_gb:.0f}GiB free; the model is ~{MODEL_GB}GB, "
-          f"~{NEED_GB}GB wanted with transfer overhead")
-    if free_gb < NEED_GB:
+
+    # Already-cached weights need no transfer, so the download budget does not
+    # apply. Without this the check fails the moment the model is in place --
+    # exactly when the run is finally ready to go -- and demands 45GB to fetch
+    # something already on disk. Count blobs only: the snapshot/ tree is
+    # symlinks into blobs/ and following them double-counts every file.
+    repo_dir = hf_home / "hub" / ("models--" + model_id.replace("/", "--"))
+    cached_gb = 0.0
+    if repo_dir.exists():
+        cached_gb = sum(f.stat().st_size for f in repo_dir.rglob("*")
+                        if f.is_file() and not f.is_symlink()) / 2**30
+    have_it = cached_gb >= MODEL_GB * 0.9
+
+    if have_it:
+        print(f"  OK   {model_id} already cached ({cached_gb:.0f}GiB in "
+              f"{repo_dir.name}); no download needed")
+        print(f"       {free_gb:.0f}GiB free for outputs")
+    else:
+        print(f"  {'OK  ' if free_gb >= NEED_GB else 'FAIL'} HF_HOME={hf_home}: "
+              f"{free_gb:.0f}GiB free; the model is ~{MODEL_GB}GB, "
+              f"~{NEED_GB}GB wanted with transfer overhead")
+        if cached_gb:
+            print(f"       ({cached_gb:.0f}GiB is already cached - a partial "
+                  f"download will resume)")
+    if not have_it and free_gb < NEED_GB:
         problems.append(f"only {free_gb:.0f}GiB free for a ~{MODEL_GB}GB download")
         print("       This VM is role-specialised: it must NOT also hold a "
               "judge checkpoint. Clear ~/hf_cache of any Qwen weights.")

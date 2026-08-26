@@ -1,10 +1,9 @@
 """
 Stage 0 selection logic, driven by a stub COCO. Laptop-runnable.
 
-pycocotools compiles from source and needs a compiler the VMs do not have, so
 `src.stage0_coco.select` is duck-typed against the six methods in `CocoLike`
-rather than importing pycocotools. That makes the part of stage 0 with the real
-risk in it testable anywhere.
+rather than importing pycocotools, which only stage 0 needs. That makes the
+part of stage 0 with the real risk in it testable anywhere.
 
 What is checked here is OUR logic: the area band, the distinct-category rule,
 the region-count window, instruction/region alignment, and end-to-end writing
@@ -171,6 +170,24 @@ def main() -> int:
         for _, label, _, instr in keep:
             ok &= check(f"img {img_id}: '{instr}' names '{label}'",
                         label in instr)
+    # No two regions of one image may be sent to the same colour. Independent
+    # per-region draws produced "change the car to yellow, change the
+    # motorcycle to yellow" on a real COCO image, which makes the two regions
+    # visually interchangeable - the worst possible stimulus for an audit whose
+    # whole question is whether the judge can tell regions apart.
+    COLOR_WORDS = set(S.COLORS)
+    for img_id, keep in got.items():
+        used = [w for _, _, _, instr in keep
+                for w in instr.split() if w in COLOR_WORDS]
+        ok &= check(f"img {img_id}: colours are distinct ({used})",
+                    len(used) == len(set(used)))
+    many = {99: [("car", .05), ("bus", .05), ("truck", .05), ("boat", .05),
+                 ("chair", .05)]}
+    k = next(iter(S.select(StubCoco(many), CFG, random.Random(3))))[1]
+    used5 = [w for _, _, _, i in k for w in i.split() if w in COLOR_WORDS]
+    ok &= check(f"5 recolourable regions get 5 distinct colours ({used5})",
+                len(used5) == 5 and len(set(used5)) == 5)
+
     # The old code drew the instruction twice - once to test for None in
     # select(), once for real in write_base() - so the string written could
     # name a different colour than the one that passed the filter.

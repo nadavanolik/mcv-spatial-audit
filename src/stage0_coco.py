@@ -19,8 +19,7 @@ NOTE ON TESTABILITY: `select` deliberately does not import or type-check
 pycocotools. It needs only the six methods listed in `CocoLike`, so the
 selection logic - the part with the real risk in it, namely whether the filter
 yields enough bases at all - can be exercised on a machine that cannot build
-pycocotools (it compiles from source and the VMs have no compiler). See
-tests/test_stage0.py.
+pycocotools installed. See tests/test_stage0.py.
 
 Usage:
     python -m src.stage0_coco --coco data/coco/annotations/instances_val2017.json \
@@ -44,10 +43,9 @@ class CocoLike(Protocol):
     """The entire pycocotools surface stage 0 uses.
 
     Written down as a Protocol so the selection logic can be driven by a stub
-    in tests. pycocotools builds from source and needs a compiler we do not
-    have on the VMs, so a hard dependency here would make the highest-risk part
-    of this stage untestable everywhere except the one machine that can build
-    it.
+    in tests. pycocotools is an extra install that only stage 0 needs, and
+    binding `select` to it would make the highest-risk part of this stage
+    untestable on the four VMs that never run stage 0 at all.
     """
     def getImgIds(self) -> list: ...
     def loadImgs(self, ids) -> list: ...
@@ -79,7 +77,8 @@ REMOVABLE = {"bottle", "cup", "bowl", "book", "clock", "potted plant",
 INSTRUCTABLE = RECOLORABLE | PERSONLIKE | REMOVABLE
 
 
-def instruction_for(label: str, rng: random.Random) -> Optional[str]:
+def instruction_for(label: str, rng: random.Random,
+                    used_colors: Optional[set] = None) -> Optional[str]:
     """Draw one instruction for a label, or None if we cannot instruct it.
 
     CONSUMES RNG STATE. It used to be called twice per region - once in
@@ -88,9 +87,22 @@ def instruction_for(label: str, rng: random.Random) -> Optional[str]:
     the one that passed the filter, and depended on how many images had been
     scanned first. `select` now carries the validated instruction through, so
     this is drawn exactly once per region.
+
+    `used_colors` keeps two regions of the SAME image from being sent to the
+    same colour. Independent draws produced real instructions like
+    "change the car to yellow, change the motorcycle to yellow", which is a bad
+    stimulus for a spatial-credit audit: the two regions end up visually
+    interchangeable, so a judge that confuses them is indistinguishable from a
+    judge that is merely colour-blind to position. Pass a per-image set.
     """
     if label in RECOLORABLE:
-        return rng.choice(COLOR_TEMPLATES).format(label=label, color=rng.choice(COLORS))
+        free = [c for c in COLORS if c not in (used_colors or ())]
+        # More recolourable regions than colours: fall back rather than fail.
+        # max_regions is 5 and so is len(COLORS), so this is unreachable today.
+        color = rng.choice(free or COLORS)
+        if used_colors is not None:
+            used_colors.add(color)
+        return rng.choice(COLOR_TEMPLATES).format(label=label, color=color)
     if label in PERSONLIKE:
         return rng.choice(ATTR_TEMPLATES).format(label=label)
     if label in REMOVABLE:
@@ -122,7 +134,7 @@ def select(coco: CocoLike, cfg: dict, rng: random.Random):
         area_img = info["width"] * info["height"]
         anns = coco.loadAnns(coco.getAnnIds(imgIds=img_id, iscrowd=False))
 
-        keep, seen = [], set()
+        keep, seen, colors = [], set(), set()
         for a in anns:
             label = cats[a["category_id"]]
             frac = a["area"] / area_img
@@ -130,7 +142,7 @@ def select(coco: CocoLike, cfg: dict, rng: random.Random):
                 continue
             if label in seen:                     # distinct categories only
                 continue
-            instr = instruction_for(label, rng)
+            instr = instruction_for(label, rng, colors)
             if instr is None:
                 continue
             seen.add(label)
