@@ -231,6 +231,51 @@ def sensitivity(d: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def response_coherence(d: pd.DataFrame) -> pd.DataFrame:
+    """Within ONE variant, do the regions move together or independently?
+
+    The sensitivity table showed target_unchanged and other_unchanged equal to
+    three decimals in three of four cells. Similar rates would be unremarkable;
+    IDENTICAL rates suggest the judge's answer changes as a whole-image event -
+    either every region of a variant differs from its control, or none does.
+
+    That is a much stronger claim than "does not localise", so it gets its own
+    test rather than an eyeball. Classify each variant as none / all / mixed by
+    how many of its regions moved, and compare the mixed fraction against what
+    independent per-region movement would produce at the same overall rate:
+
+        P(mixed) = 1 - p^n - (1-p)^n
+
+    Mixed far below that expectation means regions are not moving independently
+    - the per-region scores share one decision. Mixed at or above it is
+    consistent with independent per-region behaviour and this reading is wrong.
+    """
+    d = d[d.scored_region_id != BG]
+    rows = []
+    for judge, g in d.groupby("judge"):
+        per = (g.assign(moved=(g.delta != 0).astype(int))
+                 .groupby("variant_id")
+                 .agg(n=("moved", "size"), moved=("moved", "sum")))
+        per = per[per.n > 1]
+        if per.empty:
+            continue
+        pattern = np.where(per.moved == 0, "none",
+                           np.where(per.moved == per.n, "all", "mixed"))
+        p = float(per.moved.sum() / per.n.sum())     # overall per-region rate
+        n = float(per.n.mode().iloc[0])              # typical regions/variant
+        expect_mixed = 1.0 - p ** n - (1.0 - p) ** n
+        rows.append(dict(
+            judge=judge, n_variants=len(per),
+            regions_per_variant=n,
+            per_region_move_rate=p,
+            frac_none=float((pattern == "none").mean()),
+            frac_all=float((pattern == "all").mean()),
+            frac_mixed=float((pattern == "mixed").mean()),
+            mixed_if_independent=expect_mixed,
+        ))
+    return pd.DataFrame(rows)
+
+
 def localization(d: pd.DataFrame) -> pd.DataFrame:
     """AUROC: can delta identify WHICH region was corrupted?
 
@@ -396,6 +441,23 @@ def main():
             print("  anything: AUROC 0.5 there means 'did not react', not "
                   "'reacted in the")
             print("  wrong place'. Report the tie rate alongside every AUROC.")
+    else:
+        print("  n/a")
+
+    print("\n=== do a variant's regions move together? ===")
+    coh = response_coherence(d)
+    if len(coh):
+        print(coh.round(3).to_string(index=False))
+        coh.to_csv(out / "coherence.csv", index=False)
+        for r in coh.itertuples():
+            if r.frac_mixed < 0.6 * r.mixed_if_independent:
+                print(f"\n  {r.judge}: only {r.frac_mixed:.0%} of variants show "
+                      f"SOME regions moving")
+                print(f"  while others hold, against {r.mixed_if_independent:.0%} "
+                      f"expected if regions moved")
+                print("  independently. The judge is revising its whole answer "
+                      "for an image, not")
+                print("  the score of the region we damaged.")
     else:
         print("  n/a")
 
