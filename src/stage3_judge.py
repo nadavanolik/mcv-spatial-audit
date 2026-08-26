@@ -4,8 +4,10 @@ Stage 3 — the hot loop. Batched VLM judging via vLLM.
 Config tuned for a full A10 24GB (SM 8.6, Ampere):
   - bf16, NOT fp8: fp8 kernels need SM 8.9+, so the official FP8 checkpoint
     buys us nothing here.
-  - --max-model-len 8192: Qwen3-VL defaults to a 256k context and will refuse
-    to allocate a KV cache that large next to 17.6GB of weights.
+  - --max-model-len 4096: Qwen3-VL defaults to a 256k context and will refuse
+    to allocate a KV cache that large next to 16.6GiB of weights.
+  - gpu_memory_utilization has a NARROW workable window on this card, roughly
+    (0.87, 0.90). See DEFAULT_GPU_UTIL below; both ends fail.
   - max_pixels capped: Qwen3-VL tokenizes by area, so an uncapped 2000px image
     becomes thousands of vision tokens and per-call latency explodes.
 
@@ -38,21 +40,36 @@ MAX_PIXELS = 768 * 768
 MIN_PIXELS = 256 * 256
 
 
-# 0.85, not 0.90. vLLM budgets gpu_memory_utilization as a fraction of TOTAL
-# memory but refuses to start unless that much is FREE. The A10-24Q vGPU reports
-# 23.72GiB total and only ~21.34GiB free — roughly 2.4GiB is reserved by the
-# vGPU layer itself and never comes back — so 0.90 (21.35GiB) misses by 0.01GiB
-# and the engine dies before loading a single weight.
+# 0.89. This is squeezed between two failures, not chosen for headroom.
+#
+#   TOO HIGH: vLLM budgets gpu_memory_utilization as a fraction of TOTAL memory
+#   but refuses to start unless that much is FREE. The A10-24Q reports 23.72GiB
+#   total and only ~21.37GiB free (the vGPU layer keeps ~2.4GiB permanently),
+#   so anything above ~0.901 dies before loading a weight.
+#
+#   TOO LOW: weights (16.64GiB) plus the encoder cache and activation peak come
+#   to ~20.41GiB. Below ~0.861 the budget does not cover them and the KV cache
+#   is sized NEGATIVE -- vLLM then raises "No available memory for the cache
+#   blocks. Try increasing gpu_memory_utilization", which is accurate but reads
+#   like a request to raise a value you already lowered on purpose.
+#
+# Measured on mcvgpu2025s-0050: util 0.85 -> KV -0.25GiB (dies);
+# 0.87 -> +0.23GiB; 0.89 -> +0.70GiB (5,072 tokens, max concurrency 1.24x).
+# The workable window is (0.8605, 0.9009) and 0.89 sits near its top while
+# staying clear of the free-memory ceiling.
+#
+# This default was 0.85 and had never actually been run: every smoke test
+# passed --gpu-util 0.89 explicitly, so the first command that relied on the
+# default was the first one to fail.
 #
 # All five VMs must use the SAME value. It sizes the KV cache, which changes
 # batch composition, which can perturb logits at the numerical margins. Scores
 # from differently-configured shards are not cleanly comparable.
-DEFAULT_GPU_UTIL = 0.85
+DEFAULT_GPU_UTIL = 0.89
+GPU_UTIL_FLOOR = 0.87        # below this the KV cache goes negative on an A10
 
 
 def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL):
-    from vllm import LLM
-
     # vLLM's own message for this reports the shortfall but not the fix, and it
     # arrives after a model download. Check first and say what to pass.
     try:
@@ -73,6 +90,36 @@ def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL)
             )
     except ImportError:
         pass
+
+    if util < GPU_UTIL_FLOOR:
+        print(f"WARNING: --gpu-util {util} is below {GPU_UTIL_FLOOR}. On an A10 "
+              f"the weights and activation peak alone need ~20.4GiB, so the KV "
+              f"cache will be sized negative and the engine will refuse to "
+              f"start. Raising it is the fix, not lowering it.")
+
+    try:
+        return _build_engine(model, max_len, util)
+    except (RuntimeError, ValueError) as e:
+        # vLLM's own message says "try increasing gpu_memory_utilization",
+        # which is correct but sounds like advice to raise a value you lowered
+        # deliberately. Say which direction and why, with the numbers.
+        if "cache blocks" in str(e) or "Engine core initialization failed" in str(e):
+            raise SystemExit(
+                f"vLLM could not allocate a KV cache at --gpu-util {util}.\n"
+                f"On an A10-24Q the workable window is roughly "
+                f"({GPU_UTIL_FLOOR}, 0.90): below it the {util * 23.72:.1f}GiB "
+                f"budget does not cover 16.6GiB of weights plus ~3.8GiB of "
+                f"encoder cache and activations; above it vLLM cannot start "
+                f"because the budget exceeds free memory.\n"
+                f"Retry with --gpu-util {DEFAULT_GPU_UTIL} (the default), and "
+                f"make sure every VM uses the same value.\n"
+                f"Original error: {e}"
+            ) from e
+        raise
+
+
+def _build_engine(model: str, max_len: int, util: float):
+    from vllm import LLM
 
     return LLM(
         model=model,

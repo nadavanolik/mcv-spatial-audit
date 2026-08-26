@@ -80,7 +80,7 @@ Consequences, all already reflected in the code:
 | Constraint | Consequence |
 |---|---|
 | A10 = SM 8.6 (Ampere) | **bf16 only. Never fp8** — those kernels need SM 8.9+. The official Qwen FP8 checkpoint is not usable here. |
-| `A10-24Q` reserves ~2.4GiB | Only **21.34 of 23.72GiB is free** at startup. vLLM budgets `gpu_memory_utilization` against *total* but demands that much *free*, so 0.90 misses by 0.01GiB and the engine dies before loading a weight. `DEFAULT_GPU_UTIL = 0.85`. |
+| `A10-24Q` reserves ~2.4GiB | Only **21.37 of 23.72GiB is free** at startup, and `gpu_memory_utilization` has a **narrow two-sided window, ~(0.861, 0.901)**. Too high: vLLM budgets against *total* but demands that much *free*, so >0.901 dies before loading a weight. Too low: weights (16.64GiB) + encoder cache + activation peak need ~20.41GiB, so <0.861 sizes the KV cache **negative**. Measured: 0.85 -> **-0.25GiB, dies**; 0.87 -> +0.23; 0.89 -> +0.70. `DEFAULT_GPU_UTIL = 0.89`. |
 | Qwen3-VL accepts video | `limit_mm_per_prompt` **must** carry `"video": 0`. Left unset, vLLM sizes the encoder cache for a max-length video (151250 tokens) and OOMs in `profile_run` trying to allocate 4.62GiB on top of 16.8GiB of weights. |
 | 16.8GiB of weights on a 20.16GiB budget | Everything else has to fit in ~3.4GiB, so `load_engine` runs **eager** (no CUDA graphs), caps `max_num_batched_tokens=2048`, and `max_model_len=4096`. At 8192 + graphs the KV cache came out at **-0.40GiB**. |
 | **Qwen3-VL-8B bf16 barely fits** | At `--gpu-util 0.89` it starts, but the KV cache is **0.70GiB = 5,072 tokens, max concurrency 1.24x** — effectively serial. The `main` profile's ~1.2h/VM budget assumed real batching. **A 4B judge is the structural fix**; see the throughput note below. |
