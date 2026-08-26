@@ -69,8 +69,11 @@ stage 3  judging (vLLM)     GPU     per-VM   -> out/scores_shard{k}.parquet
 stage 4  analysis           CPU     once     -> out/analysis/
 ```
 
-Measured on one A10 (2026-08-26): stage 1 **189s/image**, stage 3
-**7.9s/request** — `main` is ~3.1h/VM sharded five ways.
+Measured on one A10 (2026-08-26): stage 1 **189s/image**; stage 3
+**2.84s/request** at greedy (`--temperature 0 --n-samples 1`), so `main` is
+**~1.1h/VM** sharded five ways. At `n=5 @ T=0.7` stage 3 is 7.9s/request and
+`main` is 3.1h/VM — and that sampling config produced an unreadable pilot, so
+greedy is both faster and correct. See CLAUDE.md.
 
 Stage 2 is a pure function of `(base edit, mask, manifest row)`, which is why
 the multi-gigabyte corrupted set never crosses the network. Stage 1 is **not**
@@ -88,7 +91,13 @@ python -m src.stage0_coco --coco .../instances_val2017.json --survey   # yield, 
 python -m src.stage1_edit --preflight        # API, auth, gating, disk, VRAM fit
 python -m src.stage3_judge ... --dry-run     # builds every request, never imports vLLM
 python -m scripts.diagnose_parse --scores out/scores_shard0.parquet    # why responses failed
+python -m scripts.verify_corruption --manifest out/manifest.parquet    # was the damage real?
 ```
+
+`verify_corruption` is the one to run before claiming the judge ignored
+something: it measures pixel change inside vs outside the target mask, so
+"the judge did not react" can be distinguished from "there was nothing to react
+to".
 
 ## Editor VM: a second venv
 
@@ -115,10 +124,13 @@ SHARD=0 OF=1 bash scripts/run_shard.sh
 python -m src.stage4_analyze --scores 'out/scores_shard*.parquet' --all-readouts
 ```
 
-**Look at the axis table before anything else.** Corruption should push
-`sc_preserve` down while `sc_success` holds — the edit still follows the
-instruction, it is just damaged. If neither moves, the audit has no signal to
-measure and you need to know in week 1, not week 4.
+**Look at the tie rate first** (`=== does the score move at all? ===`). It
+reports the share of damaged regions whose score is byte-identical to their
+clean control, split by target vs non-target. On the 2026-08-26 pilot that was
+53-80%, and the damaged region was no likelier to move than an untouched one.
+
+That table matters more than AUROC, which is 0.5 both for a judge that never
+reacts and one that reacts at random — only the tie rate tells those apart.
 
 ## Role split
 
@@ -152,9 +164,20 @@ term multiplying every region of that image. Part of each "region" reward is
 global by construction, before any judge behaviour is measured. Stage 4 reports
 `reward` and `phi` side by side precisely so this dilution is visible.
 
+## Findings so far
+
+The go/no-go pilot ran 2026-08-26 and returned **GO**. Full detail in
+`CLAUDE.md` (PILOT VERDICT) and `TEAM_BRIEF.md`; the short version is that the
+judge's per-region score behaves like a single whole-image judgement copied
+across region slots — 53-80% of damaged regions score identically to their
+clean control, and only 27% of variants show some regions moving while others
+hold against 67% expected under independence. On five photographs, so
+suggestive rather than reportable.
+
 ## Timeline to 30.9
 
-- **Week 1** — setup, COCO filter, pilot, judge histogram. Go/no-go.
+- **Week 1 — done.** Setup, COCO filter, pipeline verified end to end, pilot,
+  go/no-go. Verdict GO.
 - **Week 2** — 100 bases edited + shipped; manifest frozen; localization + redundancy on `main`.
 - **Week 3** — second judge family; nuisance + exploitability tests.
 - **Week 4** — figures, LaTeX, repo cleanup.

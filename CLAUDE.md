@@ -59,7 +59,7 @@ POSIX-only paths, and printed strings stay ASCII (the Windows console is not
 UTF-8; an em-dash in a `print` mojibakes).
 
 Local env: `.venv/`, Python **3.12** — the pinned `numpy==1.26.4` and
-`opencv-python-headless==4.10.0.84` have no 3.13 wheels. Invoke it explicitly
+`opencv-python-headless==4.11.0.86` have no 3.13 wheels. Invoke it explicitly
 (`./.venv/Scripts/python.exe tests/test_determinism.py`).
 
 ## Hardware — these are hard constraints, not preferences
@@ -83,7 +83,7 @@ Consequences, all already reflected in the code:
 | `A10-24Q` reserves ~2.4GiB | Only **21.37 of 23.72GiB is free** at startup, and `gpu_memory_utilization` has a **narrow two-sided window, ~(0.861, 0.901)**. Too high: vLLM budgets against *total* but demands that much *free*, so >0.901 dies before loading a weight. Too low: weights (16.64GiB) + encoder cache + activation peak need ~20.41GiB, so <0.861 sizes the KV cache **negative**. Measured: 0.85 -> **-0.25GiB, dies**; 0.87 -> +0.23; 0.89 -> +0.70. `DEFAULT_GPU_UTIL = 0.89`. |
 | Qwen3-VL accepts video | `limit_mm_per_prompt` **must** carry `"video": 0`. Left unset, vLLM sizes the encoder cache for a max-length video (151250 tokens) and OOMs in `profile_run` trying to allocate 4.62GiB on top of 16.8GiB of weights. |
 | 16.8GiB of weights on a 20.16GiB budget | Everything else has to fit in ~3.4GiB, so `load_engine` runs **eager** (no CUDA graphs), caps `max_num_batched_tokens=2048`, and `max_model_len=4096`. At 8192 + graphs the KV cache came out at **-0.40GiB**. |
-| **Qwen3-VL-8B bf16 barely fits** | At `--gpu-util 0.89` it starts, but the KV cache is **0.70GiB = 5,072 tokens, max concurrency 1.24x** — effectively serial. The `main` profile's ~1.2h/VM budget assumed real batching. **A 4B judge is the structural fix**; see the throughput note below. |
+| **Qwen3-VL-8B bf16 barely fits** | At `--gpu-util 0.89` it starts, but the KV cache is **0.70GiB = 5,072 tokens, max concurrency 1.24x** — effectively serial. **This does NOT matter and a 4B judge does NOT fix it**: measured 2026-08-26, a 4B at 26.22x the concurrency finished 2% faster. Grammar decoding, not batching, set the pace. See "RESOLVED: throughput". |
 | No shared FS | Corrupted variants are **regenerated per-VM**, never transferred. Only ~300MB of base edits moves, once, via HF Hub. |
 | No sudo | `opencv-python-headless` — the normal build needs `libGL.so.1` via apt. Never swap this. |
 | 90G disk | VMs are **role-specialised**: the editor VM holds the diffusion model, judge VMs hold judges. Never both. |
@@ -124,41 +124,64 @@ Consequences, all already reflected in the code:
    regenerate them per-VM. This is the opposite of the stage 2 rule and the
    asymmetry is deliberate.
 
-5. **Judge efficiency.** vLLM `SamplingParams(n=k)` shares the prefill across
-   samples. With image inputs, prefill dominates (outputs are ~15 tokens), so
-   this is a near-free 4-5x versus k separate requests. Also cap `max_pixels` —
-   Qwen3-VL tokenizes by area and an uncapped 2000px image explodes latency.
+5. **Judge efficiency — REWRITTEN 2026-08-26 after measurement.** The original
+   claim was that `SamplingParams(n=k)` shares the prefill so k samples are
+   nearly free, because "outputs are ~15 tokens". Both halves were wrong under
+   A.4.3: outputs are ~330 tokens (per-region `reasoning`), so decode is not
+   negligible, and the grammar dominates everything anyway. What actually holds:
+   - **Grammar cost is the bottleneck**, not batching and not prefill. Measured:
+     constrained 13.5 out tok/s vs unconstrained 265.9.
+   - **`maxLength` in a JSON schema costs 7.5x** and buys nothing. Never use it.
+   - **`--reasoning free`** is the default for that reason.
+   - `max_pixels` is still capped — Qwen3-VL tokenizes by area and vLLM sizes
+     the encoder cache from the cap regardless of what you send.
+   - Sampling: the pilot showed `n=5 @ T=0.7` is unusable (see PILOT VERDICT).
+     Greedy `n=1` is both correct and 5x cheaper.
 
-6. **Two score readouts — HALF BROKEN, needs a design pass.** The plan was
-   `sc_sampled` (the emitted integer) plus `sc_expected` (Σ p(k)·k over
-   digit-token logprobs), because a 1-5 integer gives ∆score granularity 1 and
-   a tie-ridden, degenerate AUROC.
-   The real A.4.3 protocol changes the premise: scores are **two-digit numbers
-   on 0-25**, nested in a list, inside a per-region object, after a
-   variable-length free-text `reasoning` field. The old readout located a score
-   by regex on a running prefix and summed over single digit tokens; none of
-   that survives. `expected_score_from_logprobs` now **raises
-   NotImplementedError** rather than silently returning wrong numbers.
-   Mitigating factor: 0-25 is a 26-point scale, so the tie problem that
-   motivated the continuous readout is far less severe than it was on 1-5.
-   Decide whether it is still needed before rebuilding it.
+6. **Two score readouts — QUESTION ANSWERED 2026-08-26. Do not rebuild it.**
+   The plan was `sc_sampled` (the emitted integer) plus `sc_expected`
+   (Σ p(k)·k over digit-token logprobs), because a 1-5 integer gives ∆score
+   granularity 1 and a tie-ridden AUROC. A.4.3 broke the implementation (scores
+   are two-digit, nested, after variable-length reasoning), and
+   `expected_score_from_logprobs` raises `NotImplementedError`.
+
+   **Leave it raising.** The pilot showed the ties are not a measurement
+   artefact to be smoothed away — they ARE the finding. 53-80% of damaged
+   regions receive a byte-identical score to their clean control under greedy
+   decoding. A continuous logprob readout would paper over exactly the
+   observation the audit exists to make, by turning "the judge did not react"
+   into a small non-zero number.
+
+   What replaced it: `sensitivity()` in stage 4 reports the tie rate directly,
+   split by target vs non-target. Report the tie rate alongside every AUROC —
+   AUROC is 0.5 both for a judge that never reacts and one that reacts at
+   random, and only the tie rate separates those.
 
 ## Repo layout
 
 ```
 src/schema.py           manifest schema, variant_id, seed derivation, hash sharding
 src/corruptions.py      5 seeded feathered degradations (determinism-critical)
+src/judge_prompt.py     A.4.3 prompt verbatim, JSON schemas, Eq. (3) reward
 src/stage0_coco.py      COCO instance-seg filter -> multi-region base specs
-src/stage1_edit.py      FLUX Kontext editing w/ CPU offload  [EDITOR VM ONLY]
+src/stage1_edit.py      FLUX Kontext editing, sequential offload  [EDITOR VM ONLY]
 src/build_manifest.py   expand base specs into the design matrix
 src/stage2_corrupt.py   regenerate this VM's shard into /dev/shm
-src/stage3_judge.py     sharded vLLM judging
-src/stage4_analyze.py   AUROC, leakage matrix, redundancy, noise floor
+src/stage3_judge.py     sharded vLLM judging, schema-constrained
+src/stage4_analyze.py   measurement quality, tie rate, coherence, AUROC,
+                        leakage matrix, redundancy, noise floor
 scripts/setup.sh        one-command bootstrap: deps for a role, then the hash check
 scripts/smoke_judge.py  one real judge call on synthetic images  [JUDGE VM ONLY]
+scripts/smoke_edit.py   one real FLUX edit on a synthetic image  [EDITOR VM ONLY]
+scripts/diagnose_parse.py   why judge responses failed, from a scores parquet [CPU]
+scripts/verify_corruption.py  did the corruption damage the image, and only
+                        inside the mask? [CPU] -- run before any insensitivity claim
 scripts/run_shard.sh    one VM's share of stages 2+3
 scripts/verify_determinism.sh   cross-VM hash check
-tests/test_determinism.py
+tests/test_determinism.py   5 determinism properties
+tests/test_stage0.py        selection logic via a stub COCO (no pycocotools)
+tests/test_stage4.py        3 synthetic judges with known behaviour + floor filter
+tests/test_syntax.py        every file parses; GPU modules import without torch
 config.yaml             pilot / main / full_cross profiles
 
 requirements.txt          core, every machine (determinism-critical pins)
@@ -276,8 +299,8 @@ and fixed by doing it, none of which any synthetic test could have surfaced:
    `backend="xgrammar"` named explicitly or vLLM rejects it.
 
 Fixed by schema-constrained decoding (`prefixItems` pinning each slot to a
-region id, `maxLength` on `reasoning`, `required` on the top-level keys) plus
-compact output. Result: **parse rate 100%, region coverage 30/30, background /
+region id, `required` on the top-level keys) plus compact output. **`maxLength`
+was tried and removed** — it cost 7.5x for no quality gain; see below. Result: **parse rate 100%, region coverage 30/30, background /
 overall / PQ all 100%**, responses down to a 240-token mean.
 `scripts/diagnose_parse.py` reads a scores parquet on CPU and classifies every
 response; run it after any judge change.
@@ -307,12 +330,14 @@ Two things this corrects:
   covers only ~43% of regions, because the judge silently omits regions and
   `background`/`overall_score`. Speed there is bought with missing data.
 
-`main` now projects to **~3.1h/VM** against the proposal's 1.2h estimate. That
-is a one-time overnight run across five VMs in parallel, so it is a schedule
-note rather than a blocker; `n_samples` 5 -> 3 would bring it to ~1.8h if it
-ever needs to fit, at the cost of a noisier noise floor.
+**SUPERSEDED by greedy decoding.** Those figures assume `n=5 @ T=0.7`. The
+pilot showed that config is unusable anyway (see PILOT VERDICT), and greedy
+(`--temperature 0 --n-samples 1`) measures **2.84 s/request** — `main` =
+7,018 requests = **1.1h/VM across five VMs**, inside the proposal's 1.2h
+estimate. Greedy fixed the measurement and the budget at once.
 
-**Never executed — expect real bugs here:**
+**Per-stage notes (all four stages have now executed on real data; this
+section is history plus the residual risk in each):**
 - `stage0_coco.py` — **selection logic is now laptop-tested** by
   `tests/test_stage0.py` (2026-08-26), which drives `select`/`write_base` with
   a stub COCO. That was made possible by deleting an `assert isinstance(coco,
@@ -332,9 +357,8 @@ ever needs to fit, at the cost of a noisier noise floor.
   signature, the offload API, HF auth, gated-repo access, disk, and the stage-0
   inputs. `torch` is imported lazily so the input checks run on the laptop.
   `scripts/smoke_edit.py` does one real edit on a synthetic image and reports
-  s/image, peak VRAM and the extrapolated budget. Still unverified until both
-  are run on the editor VM: whether the weights load under offload on a 24GB
-  A10, and whether Kontext actually follows the instructions.
+  s/image, peak VRAM and the extrapolated budget. **Both have since run on the
+  editor VM** — see the stage-1 block above. Nothing here is unverified now.
   **A latent misalignment fixed:** `out.resize(src.size)` ran *after*
   `src.thumbnail()` had mutated `src` in place, so any source larger than
   `--max-side` would have produced an `edit.png` at the thumbnailed size while
@@ -388,10 +412,12 @@ ever needs to fit, at the cost of a noisier noise floor.
   correctly reported as no signal. All 30 checks pass. `global` is the one that
   matters: it is precisely the failure this audit exists to detect, and a
   stage 4 that gave it a healthy AUROC would be worse than useless.
-  Still never seen *real* data — but it is no longer true that its logic is
-  unverified.
+  **It has since run on real pilot data** (75 variants, 5 bases) and produced
+  every table without incident. Two analyses were added afterwards because the
+  real data demanded them: `sensitivity` (the tie rate) and `response_coherence`
+  (do a variant's regions move together?). Both are covered by fixtures.
 
-## Judge behaviour — what is settled and what is the top risk
+## Judge behaviour — settled, and the risks that are now closed
 
 Settled 2026-08-25 (synthetic squares, real A.4.3 prompt, Qwen3-VL-8B):
 
@@ -457,9 +483,13 @@ Worth keeping as a methodological point for the report: a synthetic sanity check
 produced a clean, plausible, entirely wrong hypothesis, and only real data
 caught it.
 
-### Original framing (kept for context)
+### Original framing — SUPERSEDED, kept only as history
 
-The observation that started it — every cell 25.0 under `noise` only:
+Every confound listed here was subsequently eliminated: (1) the pilot ran on
+real COCO edits; (2) blur and remove were both tried and behave identically;
+(3) `success` and `preserve` are reported separately and neither localises.
+Do not re-run any of it. The observation that started it, every cell 25.0
+under `noise` only:
 
 Same instruction, correctly applied, then region 0 corrupted with `noise` at
 severities 1/2/3:
@@ -602,10 +632,12 @@ the harness.
 1. Editor VM: edit the remaining 95 bases (~5h at 189s each), then
    `tar czf bases.tar.gz -C data bases` and upload. Everything downstream is
    blocked on that tarball.
-2. Run the pilot and read the axis table (`sc_preserve` vs `sc_success` on the
-   targeted region). That is the go/no-go on the top risk.
+2. ~~Run the pilot~~ **DONE — verdict GO, see PILOT VERDICT above.** The axis
+   table turned out to be the wrong readout: the informative one is the tie
+   rate (`sensitivity`), because 53-80% of damaged regions do not move at all
+   and an axis mean cannot show that.
 3. Cross-VM determinism hash from the three VMs that have not reported it.
-4. `main`: ~3.1h/VM, sharded five ways.
+4. `main`: **~1.1h/VM** at greedy, sharded five ways (3.1h at n=5).
 
 **Do not re-litigate** (each was measured, not argued):
 - `--gpu-util` 0.89; the window is (0.861, 0.901) and both ends fail.
@@ -624,8 +656,9 @@ empty second cache and ran the disk out mid-transfer. Fixed: the script now
 inherits `HF_HOME`, reports which cache it will use, and refuses to start if the
 model is uncached with under 25G free. **Do not set `HF_HOME`.**
 
-**Still unverified:** `run_shard.sh` end to end; determinism on VMs 3-5; stage 4
-against real multi-base data (it has only seen 2- and 10-variant smoke runs).
+**Still unverified:** determinism on VMs 3-5. That is the only outstanding
+verification. (`run_shard.sh` ran end to end for the pilot; stage 4 has seen
+real 5-base data.)
 
 ## Open TODOs
 
@@ -647,7 +680,7 @@ against real multi-base data (it has only seen 2- and 10-variant smoke runs).
    Consequences already implemented: scale is **0-25, not 1-5**; requests are
    **2 per variant** (one SC scoring every region at once, one image-level PQ)
    rather than one per region — which is the protocol's own shape and cheaper
-   than what we had; `max_tokens` 32 -> 1024, since A.4.3 demands per-region
+   than what we had; `max_tokens` 32 -> 1536, since A.4.3 demands per-region
    `reasoning` before the scores; COCO `(x,y,w,h)` is converted to A.4.3's
    `bbox_2d [x1,y1,x2,y2]`.
 
@@ -682,9 +715,9 @@ against real multi-base data (it has only seen 2- and 10-variant smoke runs).
 
 ## Guardrails
 
-- Don't run the `full_cross` profile casually: 24,800 variants → 99,200 requests
-  → ~6.6h per VM. `main` (4,400 variants, ~1.2h/VM) is sized to the proposal's
-  stated budget.
+- Don't run the `full_cross` profile casually: 24,800 variants → 99,200 requests.
+  `main` at 100 bases x 3.19 regions is ~3,500 variants / 7,018 requests,
+  **~1.1h/VM at greedy**, sized to the proposal's stated budget.
 - Don't add dependencies needing apt/sudo.
 - Don't write variants, weights, or datasets to `/` beyond the budget in README.
 - Don't commit HF tokens, `data/`, or `out/` (see `.gitignore`).
@@ -697,3 +730,33 @@ against real multi-base data (it has only seen 2- and 10-variant smoke runs).
   discussion. Figures matter.
 - **Public** GitHub repo with reproducible code.
 - 5-minute talk by one representative.
+
+## The team status page (KEEP THIS UPDATED)
+
+There is a published Artifact serving as the shareable status report for the
+other four students:
+
+**https://claude.ai/code/artifact/be35225a-248e-4e38-8b62-c18a695a2407**
+
+It is the teammate-facing summary of everything in this file: pipeline status,
+the assumptions the hardware overturned, the pilot verdict, the judge
+selection, the open decisions, and the step-by-step determinism-hash
+instructions.
+
+**When you change project state, update it in the same session.** To do so:
+
+1. Read the current page with the Artifact tool: `action: "read"`, passing that
+   URL, which returns the raw HTML.
+2. Edit the HTML, then publish with `url` set to that same URL so it updates in
+   place rather than creating a second artifact. Publishing without `url` from
+   a later conversation creates a duplicate and the team keeps reading the
+   stale one.
+3. Keep the favicon as the existing emoji and the `<title>` stable — people
+   find it by both.
+
+Things that should trigger an update: a pilot or `main` result, a decision from
+the "DECIDE FIRST" list being made, a VM reporting its determinism hash, or any
+finding being retired the way "semantic yes, photometric no" was.
+
+The same content lives in `TEAM_BRIEF.md`; keep the two consistent, and prefer
+the brief for anything a teammate needs to copy-paste on a VM.

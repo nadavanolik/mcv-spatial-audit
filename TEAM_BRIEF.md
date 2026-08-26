@@ -2,9 +2,11 @@
 
 Updated 2026-08-26.
 
-Short version: **the pipeline runs end to end on real data.** All five stages,
-100% parse rate, 100% region coverage, throughput understood and affordable.
-What's left is running the experiment and writing it up.
+Short version: **the pipeline runs end to end on real data, and the go/no-go
+pilot returned GO.** All five stages, 100% parse, 100% region coverage. On five
+images the judge's per-region score behaves like one whole-image judgement
+copied across region slots — which is exactly the failure this project set out
+to look for. What's left is running it at scale and writing it up.
 
 ## What we're actually testing (refresher)
 
@@ -55,11 +57,49 @@ Everything below has actually been executed, not just written.
 - **Stage 1 (FLUX Kontext editing).** Works. 189s/image. The edit follows the
   instruction and mostly leaves other regions alone. 5 pilot bases are edited.
 - **Stage 2 (corruption).** 75 pilot variants rendered from real edits in 3s.
-- **Stage 3 (vLLM judging).** 100% parse rate, 100% region coverage,
-  ~7.9s/request.
+- **Stage 3 (vLLM judging).** 100% parse rate, 100% region coverage.
+  **2.84s/request** at greedy; 7.9s/request at `n=5 @ T=0.7`.
 - **Stage 4 (analysis).** Migrated to the real score columns and verified
   against three synthetic judges with known behaviour.
 - **The A.4.3 prompt is in, verbatim.** No longer a placeholder.
+
+## PILOT VERDICT (2026-08-26): GO
+
+5 bases, 75 variants, `[none, blur, remove]`, greedy decoding. Parse 100%.
+
+**First we checked the damage was real** — nobody had, and "the judge ignored
+it" only means something if there was something to ignore. Measured in 8-bit
+levels, inside vs outside the target mask:
+
+| corruption | inside | outside | masked pixels changed |
+|---|---|---|---|
+| blur s1 | 7.60 | 0.042 | 39% |
+| blur s3 | 21.87 | 0.110 | 79% |
+| remove s1 | 35.01 | 0.001 | 78% |
+| remove s3 | 35.52 | 0.001 | 83% |
+
+179x to 25,000x contrast. The damage is obvious and confined to the region we
+targeted — which also confirms, on real edits, the assumption the whole leakage
+analysis rests on.
+
+**Then, three readings that agree:**
+
+1. **The score usually doesn't move.** 53–80% of damaged regions get a score
+   *identical* to their clean control. Greedy decoding, so not sampling noise.
+2. **When it moves, it isn't the damaged region.** The share unchanged is the
+   same for damaged and untouched regions — equal to three decimals in three of
+   four cells.
+3. **The judge revises the whole image at once.** Only 27% of variants show
+   some regions moving while others hold, against 67% expected if regions moved
+   independently. Backed by leave-one-out R² of 0.52–0.56.
+
+AUROC came out 0.45–0.47, but that's a *consequence*, not the finding — AUROC
+is 0.5 both for a judge that never reacts and one that reacts at random.
+
+**Caveats, and they matter:** this is **5 photographs**. The 90 rows per
+severity come from five images, so the effective sample is 5, not 90. Only
+`blur` and `remove` were tested, one judge, one family. `main` lifts it to 319
+per cell — a 21x power increase.
 
 ## What we learned the hard way (read this before touching the VMs)
 
@@ -90,9 +130,9 @@ symptoms if you deviate.
 | Role | Status / next task |
 |---|---|
 | **Editor VM** | Stage 0 + 1 **working**; 5 of 100 bases edited. Next: edit the remaining 95 (~5h), tar `data/bases`, upload to HF Hub. **Everyone else is blocked on that tarball.** |
-| **Judge harness** | vLLM + Qwen3-VL-8B **working**, prompt is the real A.4.3. Next: nothing blocking — help with the pilot. |
+| **Judge harness** | vLLM + Qwen3-VL-8B **working**, real A.4.3 prompt, schema-constrained, 100% parse. Next: decide the sampling config (see Open decisions). |
 | **Corruption + manifest** | Determinism confirmed on 2 of 5 VMs. Next: get the other three to print the hash. Own `config.yaml`. |
-| **Analysis** | `stage4_analyze.py` is migrated and tested. Next: sketch the figures against the synthetic fixtures in `tests/test_stage4.py`, which already produce every table. |
+| **Analysis** | `stage4_analyze.py` migrated, tested, and run on real pilot data. Next: figures. The tie-rate and coherence tables are the headline ones, not AUROC. |
 | **Second judge** | Qwen3-VL-4B is downloaded and runs. Next: pick a second *family* (not just scale) and justify it. |
 
 ## ACTION REQUIRED: send Nadav your determinism hash
@@ -229,12 +269,9 @@ and vLLM pin different torch builds — see README.
 
 1. **Finish the base edits** (editor VM, ~5h for the remaining 95). Everything
    downstream waits on this.
-2. **Run the pilot and look at the numbers.** `config.yaml`'s `pilot` profile is
-   now `[none, blur, remove]` — `remove` is there because it is the only
-   corruption the judge visibly reacted to on synthetic data, and `blur` is the
-   contrast case. A pilot of only `blur` would have told us nothing.
+2. ~~Run the pilot~~ **DONE — verdict GO, see above.**
 3. **Cross-VM hash from the remaining three machines.**
-4. **`main` run**: ~3.1h/VM, sharded five ways.
+4. **`main` run**: **~1.1h/VM** at greedy, sharded five ways.
 5. Second judge family; nuisance + exploitability tests; figures; LaTeX.
 
 ## The question we thought was open — answered, and the answer was no
