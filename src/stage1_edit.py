@@ -1,5 +1,5 @@
 """
-Stage 1 — generate the base edits. Runs ONCE, on the editor VM only.
+Stage 1 - generate the base edits. Runs ONCE, on the editor VM only.
 
 Two properties make this stage different from every other:
 
@@ -10,8 +10,23 @@ Two properties make this stage different from every other:
 2. NOT reproducible from a seed. Diffusion sampling drifts across library
    versions, attention backends and kernel selection even at fixed seed. So
    unlike stage 2, the output here is an IMMUTABLE ARTEFACT: generate once,
-   tar it, ship it, and treat that tarball as ground truth — including for the
+   tar it, ship it, and treat that tarball as ground truth - including for the
    reproducibility claim in the report. Do not regenerate it per-VM.
+
+   Because it cannot be reproduced, it must be *described*: every run writes
+   `data/bases/stage1_provenance.json` with the model revision and the library
+   versions that produced the edits. That file is the reproducibility claim.
+
+TEST IT BEFORE YOU DOWNLOAD 24GB:
+
+    python -m src.stage1_edit --preflight
+
+checks the pipeline class name, its call signature, the offload API, HF auth,
+gated-repo access and free disk - all without fetching a single weight. Then:
+
+    python -m scripts.smoke_edit
+
+does one real edit on a synthetic image and reports s/image and peak VRAM.
 
 After this runs:
     tar czf bases.tar.gz -C data bases
@@ -24,35 +39,247 @@ from __future__ import annotations
 
 import argparse
 import gc
+import inspect
 import json
+import shutil
+import time
 from pathlib import Path
 
-import torch
 from PIL import Image
 from tqdm import tqdm
 
+# torch is NOT imported at module scope. --preflight's input checks (bases.json,
+# source.png, instructions, resolution vs --max-side) are pure CPU and are
+# precisely what you want to run on the laptop BEFORE pushing to the editor VM.
+# A top-level torch import made that impossible, which defeated the point --
+# same reasoning as stage3_judge's --dry-run not importing vLLM.
+
+MODEL_ID = "black-forest-labs/FLUX.1-Kontext-dev"
+
+# FLUX.1-Kontext-dev in bf16 is ~24GB of safetensors, and HF_HOME keeps the
+# download alongside the extracted snapshot for part of the transfer. 60GB is
+# the point below which this is likely to fail partway rather than fail fast.
+NEED_GB = 60
+
 
 def load_editor(model_id: str):
+    import torch
     from diffusers import FluxKontextPipeline
     pipe = FluxKontextPipeline.from_pretrained(model_id, torch_dtype=torch.bfloat16)
     # Model-level offload: keeps one submodule on GPU at a time. Sequential
     # offload is ~5x slower still but survives even tighter budgets.
     pipe.enable_model_cpu_offload()
-    pipe.enable_vae_slicing()
+    _enable_vae_slicing(pipe)
     return pipe
+
+
+def _enable_vae_slicing(pipe) -> str:
+    """diffusers moved this from the pipeline onto the VAE. Take whichever
+    exists and say which, rather than crashing on one version or silently
+    skipping the memory saving on the other."""
+    if hasattr(pipe, "enable_vae_slicing"):
+        pipe.enable_vae_slicing()
+        return "pipe.enable_vae_slicing()"
+    if hasattr(getattr(pipe, "vae", None), "enable_slicing"):
+        pipe.vae.enable_slicing()
+        return "pipe.vae.enable_slicing()"
+    return "UNAVAILABLE - neither API present"
+
+
+def provenance(model_id: str, a) -> dict:
+    """What it would take to explain these bytes to a reviewer. Diffusion
+    output is not seed-reproducible across versions, so this is the closest
+    thing to a hash the artefact can have."""
+    import diffusers
+    import torch
+    import transformers
+    rev = None
+    try:
+        from huggingface_hub import HfApi
+        rev = HfApi().model_info(model_id).sha
+    except Exception as e:                       # offline, or not authorised
+        rev = f"unavailable: {type(e).__name__}"
+    return {
+        "model": model_id, "revision": rev,
+        "steps": a.steps, "guidance": a.guidance, "max_side": a.max_side,
+        "seed": 0,
+        "diffusers": diffusers.__version__,
+        "transformers": transformers.__version__,
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "device": (torch.cuda.get_device_name(0)
+                   if torch.cuda.is_available() else "cpu"),
+        "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def preflight(root: Path, model_id: str, a) -> int:
+    """Everything that can fail, checked before anything is downloaded.
+
+    Deliberately mirrors stage3_judge's --dry-run: the expensive, gated,
+    hardware-bound part of the stage should be the LAST thing that can go
+    wrong, not the first.
+    """
+    print("=== PREFLIGHT: no weights are fetched ===")
+    problems: list[str] = []
+
+    print("\n--- 1. diffusers API surface ---")
+    try:
+        from diffusers import FluxKontextPipeline
+        print(f"  OK   from diffusers import FluxKontextPipeline")
+        sig = inspect.signature(FluxKontextPipeline.__call__).parameters
+        for p in ("image", "prompt", "num_inference_steps", "guidance_scale",
+                  "generator"):
+            if p in sig:
+                print(f"  OK   __call__ accepts {p}")
+            else:
+                problems.append(f"FluxKontextPipeline.__call__ has no '{p}'")
+                print(f"  FAIL __call__ has NO parameter '{p}'")
+        extra = [p for p in ("max_area", "_auto_resize", "height", "width")
+                 if p in sig]
+        if extra:
+            print(f"  note __call__ also accepts {extra} - Kontext may resize "
+                  f"internally; we resize the output back to source size.")
+        if not hasattr(FluxKontextPipeline, "enable_model_cpu_offload"):
+            problems.append("no enable_model_cpu_offload")
+            print("  FAIL no enable_model_cpu_offload")
+        else:
+            print("  OK   enable_model_cpu_offload present")
+        print(f"  note vae slicing will use: "
+              f"{'pipe.enable_vae_slicing()' if hasattr(FluxKontextPipeline, 'enable_vae_slicing') else 'pipe.vae.enable_slicing()'}")
+    except ImportError as e:
+        problems.append(f"cannot import FluxKontextPipeline: {e}")
+        print(f"  FAIL {e}")
+
+    print("\n--- 2. GPU ---")
+    try:
+        import torch
+    except ImportError:
+        torch = None
+        print("  SKIP torch is not installed here. Everything below except "
+              "this check is still meaningful on the laptop; run --preflight "
+              "again on the editor VM for the GPU line.")
+    if torch is not None and torch.cuda.is_available():
+        free, total = torch.cuda.mem_get_info()
+        print(f"  OK   {torch.cuda.get_device_name(0)}: "
+              f"{free / 2**30:.2f}GiB free of {total / 2**30:.2f}GiB")
+        print("  note offload keeps one submodule resident, so 24GB is ample.")
+    elif torch is not None:
+        problems.append("no CUDA device")
+        print("  FAIL torch.cuda.is_available() is False")
+
+    print("\n--- 3. HF auth and gated-repo access ---")
+    # FLUX.1-Kontext-dev is gated: the licence must be accepted by the account
+    # whose token this is. That failure otherwise appears only after the
+    # download starts, and reads as a 403 with no explanation.
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        who = api.whoami()
+        print(f"  OK   logged in as {who.get('name')}")
+        try:
+            info = api.model_info(model_id)
+            print(f"  OK   {model_id} accessible, revision {info.sha[:12]}")
+        except Exception as e:
+            problems.append(f"cannot access {model_id}: {type(e).__name__}")
+            print(f"  FAIL cannot access {model_id}: {type(e).__name__}: "
+                  f"{str(e)[:200]}")
+            print(f"       Accept the licence at "
+                  f"https://huggingface.co/{model_id}")
+    except Exception as e:
+        problems.append(f"not logged in to HF: {type(e).__name__}")
+        print(f"  FAIL {type(e).__name__}: {str(e)[:200]}")
+        # `huggingface-cli login` was renamed; recent hub versions want
+        # `hf auth login` and only mention the new spelling in the error.
+        print("       Run: hf auth login   (older hub: huggingface-cli login)")
+
+    print("\n--- 4. disk for the weights ---")
+    import os
+    hf_home = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface"))
+    probe = hf_home if hf_home.exists() else hf_home.parent
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    free_gb = shutil.disk_usage(probe).free / 2**30
+    print(f"  {'OK  ' if free_gb >= NEED_GB else 'FAIL'} HF_HOME={hf_home}: "
+          f"{free_gb:.0f}GiB free (need ~{NEED_GB})")
+    if free_gb < NEED_GB:
+        problems.append(f"only {free_gb:.0f}GiB free for a ~24GB gated download")
+        print("       This VM is role-specialised: it must NOT also hold a "
+              "judge checkpoint. Clear ~/hf_cache of any Qwen weights.")
+
+    print("\n--- 5. inputs from stage 0 ---")
+    bj = root / "bases.json"
+    if not bj.exists():
+        problems.append(f"missing {bj}")
+        print(f"  FAIL missing {bj} - run stage 0 first")
+    else:
+        specs = json.loads(bj.read_text())
+        if a.limit:
+            specs = specs[: a.limit]
+        missing_src = [s["base_id"] for s in specs
+                       if not (root / s["base_id"] / "source.png").exists()]
+        no_instr = [s["base_id"] for s in specs if not s.get("instruction")]
+        done = [s["base_id"] for s in specs
+                if (root / s["base_id"] / "edit.png").exists()]
+        print(f"  OK   {len(specs)} base specs")
+        print(f"       {len(done)} already have edit.png; "
+              f"{len(specs) - len(done)} to do")
+        if missing_src:
+            problems.append(f"{len(missing_src)} bases missing source.png")
+            print(f"  FAIL {len(missing_src)} missing source.png, "
+                  f"e.g. {missing_src[0]}")
+        else:
+            print("  OK   every base has source.png")
+        if no_instr:
+            problems.append(f"{len(no_instr)} bases have an empty instruction")
+            print(f"  FAIL {len(no_instr)} empty instructions, e.g. {no_instr[0]}")
+        else:
+            print("  OK   every base has a non-empty instruction")
+        if specs:
+            s0 = specs[0]
+            im = Image.open(root / s0["base_id"] / "source.png")
+            print(f"\n  first job: {s0['base_id']}  {im.size[0]}x{im.size[1]}")
+            print(f"    instruction: {s0['instruction']}")
+            print(f"    regions:     {len(s0['regions'])}")
+            if max(im.size) > a.max_side:
+                print(f"    note source exceeds --max-side {a.max_side}; it "
+                      f"will be thumbnailed, and masks from stage 0 are at "
+                      f"SOURCE resolution. Keep --max-side >= the largest "
+                      f"source or stage 2 will misalign.")
+
+    print("\n--- would run ---")
+    print(f"  model={model_id} dtype=bfloat16 offload=model_cpu_offload")
+    print(f"  steps={a.steps} guidance={a.guidance} max_side={a.max_side} seed=0")
+
+    print()
+    if problems:
+        print(f"PREFLIGHT FAILED - {len(problems)} problem(s):")
+        for p in problems:
+            print(f"  - {p}")
+        return 1
+    print("PREFLIGHT OK - safe to start the download.")
+    return 0
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bases", default="data/bases")
-    ap.add_argument("--model", default="black-forest-labs/FLUX.1-Kontext-dev")
+    ap.add_argument("--model", default=MODEL_ID)
     ap.add_argument("--steps", type=int, default=28)
     ap.add_argument("--guidance", type=float, default=2.5)
     ap.add_argument("--max-side", type=int, default=1024)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--preflight", action="store_true",
+                    help="check the API, auth, gating, disk and inputs without "
+                         "downloading any weights, then exit")
     a = ap.parse_args()
 
     root = Path(a.bases)
+    if a.preflight:
+        raise SystemExit(preflight(root, a.model, a))
+
+    import torch
+
     specs = json.loads((root / "bases.json").read_text())
     if a.limit:
         specs = specs[: a.limit]
@@ -64,11 +291,14 @@ def main():
 
     pipe = load_editor(a.model)
 
+    t0, n = time.time(), 0
     for s in tqdm(todo, desc="editing"):
         d = root / s["base_id"]
         src = Image.open(d / "source.png").convert("RGB")
+        before = src.size
         src.thumbnail((a.max_side, a.max_side), Image.LANCZOS)
 
+        import torch
         out = pipe(
             image=src,
             prompt=s["instruction"],
@@ -77,13 +307,25 @@ def main():
             generator=torch.Generator("cpu").manual_seed(0),
         ).images[0]
 
-        # Masks were computed at source resolution; keep the edit aligned to it.
-        out = out.resize(src.size, Image.LANCZOS)
+        # Masks were computed at SOURCE resolution and stage 2 indexes them
+        # straight into edit.png, so the edit must come back at exactly the
+        # source's size - not the thumbnailed size, and not whatever internal
+        # resolution Kontext chose. Misalignment here corrupts the wrong pixels
+        # and silently invalidates every downstream number.
+        out = out.resize(before, Image.LANCZOS)
         out.save(d / "edit.png")
+        n += 1
         gc.collect()
         torch.cuda.empty_cache()
 
-    print("done — now tar data/bases and upload once")
+    dt = time.time() - t0
+    print(f"edited {n} images in {dt / 60:.1f} min ({dt / max(n, 1):.1f}s each)")
+
+    prov = provenance(a.model, a)
+    prov["n_edited"] = n
+    (root / "stage1_provenance.json").write_text(json.dumps(prov, indent=2))
+    print(f"provenance -> {root / 'stage1_provenance.json'}")
+    print("done - now tar data/bases and upload once")
 
 
 if __name__ == "__main__":

@@ -226,9 +226,39 @@ it — a failure there must not block the other four VMs.
   message assembly. It says nothing about whether vLLM accepts those messages.
 
 **Never executed — expect real bugs here:**
-- `stage0_coco.py` — needs COCO downloaded; `pycocotools` API calls unverified.
-- `stage1_edit.py` — FLUX Kontext is gated on HF; pipeline class name and
-  offload behaviour unverified on this hardware.
+- `stage0_coco.py` — **selection logic is now laptop-tested** by
+  `tests/test_stage0.py` (2026-08-26), which drives `select`/`write_base` with
+  a stub COCO. That was made possible by deleting an `assert isinstance(coco,
+  COCO)` whose only effect was to force a `pycocotools` import — a library that
+  compiles from source and cannot be built on the VMs — into the one function
+  carrying the real risk. Still unverified: pycocotools' own API
+  (`annToMask`, `getAnnIds(iscrowd=...)`) and, more importantly, **whether
+  val2017 even contains 200 qualifying images**. Run `--survey` first; it needs
+  only the annotations JSON, no images and no writes.
+  Three bugs fixed while testing: `config.yaml`'s `selection:` block was
+  ignored in favour of hardcoded values; `instruction_for` was drawn twice per
+  region (once to test for `None`, once for real) so the instruction written
+  was a different draw from the one that passed the filter; and `"trash can"`
+  is not a COCO category, so it matched nothing, silently, forever.
+- `stage1_edit.py` — **`--preflight` now settles most of it without a
+  download.** It checks the `FluxKontextPipeline` class name, its `__call__`
+  signature, the offload API, HF auth, gated-repo access, disk, and the stage-0
+  inputs. `torch` is imported lazily so the input checks run on the laptop.
+  `scripts/smoke_edit.py` does one real edit on a synthetic image and reports
+  s/image, peak VRAM and the extrapolated budget. Still unverified until both
+  are run on the editor VM: whether the weights load under offload on a 24GB
+  A10, and whether Kontext actually follows the instructions.
+  **A latent misalignment fixed:** `out.resize(src.size)` ran *after*
+  `src.thumbnail()` had mutated `src` in place, so any source larger than
+  `--max-side` would have produced an `edit.png` at the thumbnailed size while
+  stage 0's masks stayed at source resolution — stage 2 would then corrupt the
+  wrong pixels. COCO images are <=640px so it never fired, but `--max-side`
+  is a knob and the bug was one config change away. Now resizes to the size
+  captured before thumbnailing.
+  Stage 1 also writes `stage1_provenance.json` (model revision, diffusers /
+  transformers / torch versions, steps, guidance). Diffusion output is not
+  seed-reproducible across versions, so for an immutable artefact that file
+  *is* the reproducibility claim.
 - `stage3_judge.py` — was the highest-risk file; most of that risk is now
   retired. Verified against the installed vllm 0.11.0 on a judge VM
   (2026-08-25), all without a GPU:
