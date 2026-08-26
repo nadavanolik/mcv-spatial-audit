@@ -472,45 +472,69 @@ project set out to look for. But it needs real data behind it.
 The judge scores an edit **it was shown no images of** — text-only returns all
 25s. Worth a line in the report.
 
-## PILOT RESULT, 2026-08-26 — inconclusive, and the reason is measurable
+## PILOT VERDICT, 2026-08-26 - GO. Run `main`.
 
-75 variants, 5 bases, `[none, blur, remove]`, Qwen3-VL-8B, n=5 @ temperature
-0.7. Parse 99.2%, coverage 99.2%, `run_shard.sh` verified end to end.
+5 bases, 75 variants, `[none, blur, remove]`, Qwen3-VL-8B, **greedy
+(--temperature 0 --n-samples 1)**. Parse 100%, coverage 100%.
 
-**AUROC 0.46-0.52 on every readout. Do NOT report this as "the judge has no
-spatial signal" — the design could not have detected one.**
+### The stimulus is real and perfectly localised (verified, not assumed)
 
-| | |
-|---|---|
-| noise floor (SD over 5 samples of the SAME input) | **0.363** |
-| reward range | 0.959 |
-| floor as share of range | **37.9%** |
-| smallest detectable effect (2 SD) | 0.727 = **75.8% of range** |
-| largest effect observed | 0.013 = 1.4% |
-| values sitting on a rail (0 or max) | **45.6%** |
+`scripts/verify_corruption.py`, mean 8-bit levels, region = 4.5% of image:
 
-Two impossibilities confirm it is noise, not signal: `blur` **raised** the
-targeted region's score (+1.16 phi vs clean), and `remove` severity 3 scored
-**higher** than severity 1 (12.49 vs 10.50).
+| corruption | inside mask | outside mask | masked pixels changed |
+|---|---|---|---|
+| blur s1 | 7.60 | 0.042 | 39% |
+| blur s3 | 21.87 | 0.110 | 79% |
+| remove s1 | 35.01 | 0.001 | 78% |
+| remove s3 | 35.52 | 0.001 | 83% |
 
-**Cause: sampling.** `n_samples=5 @ temperature=0.7` was OUR choice to estimate
-a noise floor, not the paper's protocol. The judge's output is bimodal at 0 and
-25, so at 0.7 it flips rails between samples of an identical input and the floor
-swamps any effect. **Next: `--temperature 0 --n-samples 1`** (also 5x cheaper,
-~5 min for the pilot).
+Contrast inside:outside is 179x to 25,000x. **"The judge did not react" is
+therefore about the judge**, and the leakage analysis' core assumption -- that
+untouched regions really are untouched -- holds on real edits, not just on the
+synthetic fixture.
 
-**A hypothesis that was WRONG, recorded so nobody re-runs it:** floor effects
-were suspected — 25% of scores are exactly 0, and a region already at 0 cannot
-drop. But `--min-control 0` kept **100%** of rows: the control baseline averages
-5 samples over several control variants, so essentially no control mean lands at
-0. The per-sample zeros do not become baseline zeros. `--min-control` stays in
-stage 4 as a diagnostic, but it is not the problem here.
+*Design note:* `remove` s1 and s3 differ by 0.5 levels. The severity ladder is
+effectively binary for `remove`; only `blur` is graded. Do not read a flat
+remove-severity response as insensitivity to severity.
 
-**What survives the noise:** leave-one-out redundancy **R^2 = 0.57-0.73**
-(sc_preserve highest at 0.734). Region scores co-move strongly within an image.
-Noise *attenuates* correlation, so the true figure is higher than measured —
-this is the one pilot number that points at the "global impression" hypothesis,
-and it is the most interesting result so far.
+### The finding, three ways, all pointing the same direction
+
+1. **The score usually does not move.** 53-80% of DAMAGED regions receive a
+   score identical to their clean control. Deterministic decoding, so this is
+   not sampling noise.
+2. **When it moves, it is not the damaged region.** target_unchanged equals
+   other_unchanged to three decimals in three of four cells (0.667/0.667,
+   0.667/0.667, 0.533/0.533). The region we damaged is no more likely to change
+   than one we did not touch.
+3. **The judge revises the whole image at once.** Only **27%** of variants show
+   some regions moving while others hold, against **67%** expected if regions
+   moved independently at the same overall rate. Corroborated by leave-one-out
+   redundancy **R^2 = 0.52-0.56**.
+
+Together these say the per-region score behaves like **one whole-image
+judgement replicated across region slots**, which is precisely the failure this
+audit was built to detect. AUROC 0.45-0.47 is a *consequence*, and on its own it
+would have been unreadable -- AUROC is 0.5 both for a judge that never reacts
+and one that reacts at random.
+
+### Caveats, to state in the report
+
+- **n = 5 photographs.** 90 rows per severity come from five images; the
+  effective independent sample is 5. Suggestive, not reportable.
+- Only `blur` and `remove` tested; one judge, one family.
+- Regions average 4.5% of image area -- the low end of the 2-25% band.
+
+### Greedy also fixed the budget
+
+2.84 s/request measured. `main` = 7,018 requests, **1.1h/VM across five VMs**,
+inside the proposal's 1.2h estimate (it was 3.1h at n=5). `main` also lifts
+n_target per cell from 15 to 319, a **21x** power increase.
+
+**Worth reporting separately:** at temperature 0.7 the same judge's score varied
+across samples of an IDENTICAL input by 38% of the scale (SD 0.363 on a 0.959
+range). A reward model that unstable is a problem for RL training regardless of
+whether it localises. Consider a small n=5 @ T=0.7 run on ~10 bases purely to
+characterise it.
 
 ## Session close-out, 2026-08-26
 
