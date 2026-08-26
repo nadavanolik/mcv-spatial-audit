@@ -213,6 +213,13 @@ it — a failure there must not block the other four VMs.
 - `stage2_corrupt.py` — ran end-to-end on the laptop (2026-08-25) against a
   synthetic 3-base fixture: 81/81 variants rendered. Its free-space guard used
   `os.statvfs`, which does not exist on Windows; now `shutil.disk_usage`.
+- **A latent crash at the end of every stage-3 run, found and fixed
+  (2026-08-26).** `scored_region_id` mixed region ints with the literal `"bg"`,
+  so pyarrow inferred `int64` from the ints and raised `ArrowInvalid` on the
+  first `"bg"` — in `res.to_parquet(a.out)`, i.e. *after* a whole shard had
+  been judged. An hour of A10 time per VM, discarded at the write. Both
+  `scored_region_id` and `target_region_id` are now stringified in
+  `build_requests`/`run`. Reproduced on pandas 2.2.2 / pyarrow 17.0.0.
 - `stage3_judge.py` **up to but not including the engine** — `--dry-run` built
   all 243 requests from that fixture with `vllm` and `torch` confirmed absent
   from `sys.modules`. This exercises manifest → shard → regions.json → prompt →
@@ -256,7 +263,16 @@ it — a failure there must not block the other four VMs.
     architectural decision 6.
 
   `stage3_judge.py` is verified as far as synthetic data can take it.
-- `stage4_analyze.py` — logic is straightforward but has never seen real data.
+- `stage4_analyze.py` — **no longer unexercised.** `tests/test_stage4.py`
+  (2026-08-26, laptop) fabricates three judges in stage 3's exact output schema
+  and asserts stage 4 recovers each: `perfect` (only the corrupted region
+  drops) -> AUROC 1.00; `global` (damage moves every region equally) -> AUROC
+  0.50 and R^2 0.998; `blind` (a constant) -> noise floor exactly 0 and
+  correctly reported as no signal. All 30 checks pass. `global` is the one that
+  matters: it is precisely the failure this audit exists to detect, and a
+  stage 4 that gave it a healthy AUROC would be worse than useless.
+  Still never seen *real* data — but it is no longer true that its logic is
+  unverified.
 
 ## Judge behaviour — what is settled and what is the top risk
 
@@ -342,10 +358,22 @@ The judge scores an edit **it was shown no images of** — text-only returns all
    measured. Within one image it cancels from region-to-region comparisons;
    across variants it does not. Worth a paragraph in the report.
 
-1b. **`stage4_analyze.py` still expects the old columns.** stage 3 now emits
-   `sc_success`, `sc_preserve`, `sc_background`, `sc_overall_*`, `pq_*`,
-   `reward`, `parsed` — not `sc_sampled`/`sc_expected`. Migrate before running
-   any analysis.
+1b. ~~`stage4_analyze.py` still expects the old columns.~~ **DONE
+   (2026-08-26).** Migrated to the A.4.3 columns and verified end to end by
+   `tests/test_stage4.py`. Four readouts now run side by side — `reward`
+   (Equation 3, the headline), `phi` (Eq. 3 with the global AES factor divided
+   out), `sc_preserve` and `sc_success`. The last two exist to answer the top
+   risk directly: corruption should drive `preserve` down while `success`
+   holds, and `phi = min()` hides which axis moved. `--all-readouts` runs the
+   lot. Two further changes worth knowing:
+   - **Redundancy now regresses on the leave-one-out mean of the image's other
+     regions**, not the plain image mean. The plain mean includes the region
+     itself, which at ~4 regions is a quarter of the predictor and manufactures
+     correlation out of pure noise. R^2 near 1 now means what it claims to.
+   - **Background rows are excluded from AUROC** (`bg` is never a corruption
+     target, so it is a guaranteed negative that would inflate AUROC for free)
+     but kept in the leakage matrix, where "damage in region i moved the
+     background score" is a real thing to see.
 2. Pick and wire the second judge family (cross-family agreement is a finding).
 3. Nuisance and exploitability tests are designed but not implemented — they
    reuse the stage 3 harness with varied presentation (box/mask/crop, prompt

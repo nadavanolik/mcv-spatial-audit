@@ -100,10 +100,23 @@ All five run `scripts/run_shard.sh` with their own `SHARD` once stage 3 starts.
 
 ## Before you report anything
 
-`src/judge_prompt.py` ships a **placeholder** SFReward prompt with the right
-shape but invented wording. Replace it verbatim from arXiv:2606.26872's
-appendix. The audit's claim is that it evaluates *the published protocol*; an
-invented prompt silently invalidates the comparison to paper [1].
+`src/judge_prompt.py` now carries A.4.3 **verbatim** from arXiv:2606.26872.
+Three caveats belong in the report rather than buried in a docstring:
+
+- **The PQ prompt is reconstructed, not verbatim.** The paper shows SFReward's
+  PQ *output* (A.4.4) but never its PQ *prompt*.
+- **How the instruction and region list are appended is ours.** A.4.3 says only
+  "you will be provided with pre-identified editing regions" and never shows
+  the injection format.
+- **SFReward is a fine-tuned model**; A.4.3 is the prompt that labelled its
+  training data with a Gemini-3-Pro teacher. We apply it to *base* Qwen3-VL-8B,
+  so we audit the prompt-based protocol, not the released reward model.
+
+One finding falls straight out of Equation (3): the region reward is
+`sqrt(phi(IF) * AES) / C`, where `AES = min(PQ)` is a single **image-level**
+term multiplying every region of that image. Part of each "region" reward is
+global by construction, before any judge behaviour is measured. Stage 4 reports
+`reward` and `phi` side by side precisely so this dilution is visible.
 
 ## Timeline to 30.9
 

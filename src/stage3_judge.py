@@ -122,7 +122,7 @@ def build_requests(rows: pd.DataFrame, bases: Path, variants: Path) -> tuple[lis
         edit = Image.open(variants / f"{row.variant_id}.png").convert("RGB")
 
         common = dict(variant_id=row.variant_id, base_id=row.base_id,
-                      target_region_id=row.target_region_id,
+                      target_region_id=str(row.target_region_id),
                       corruption=row.corruption, severity=row.severity,
                       area_bin=row.area_bin, is_control=row.is_control,
                       region_ids=[r["region_id"] for r in regions])
@@ -176,7 +176,14 @@ def run(llm, msgs, meta, n_samples: int, temperature: float) -> pd.DataFrame:
             for rid in list(m["region_ids"]) + ["bg"]:
                 pair = None if rid == "bg" else sc.get("regions", {}).get(rid)
                 recs.append({
-                    **base, "sample_idx": i, "scored_region_id": rid,
+                    # str(rid), NOT rid. The column carries region ints and the
+                    # literal "bg", and pyarrow infers int64 from the ints then
+                    # dies on the first "bg" -- which would surface as an
+                    # ArrowInvalid in res.to_parquet() AFTER a full shard had
+                    # been judged. Stringify here so the parquet write cannot
+                    # throw away an hour of A10 time. target_region_id is
+                    # stringified alongside it so the two stay comparable.
+                    **base, "sample_idx": i, "scored_region_id": str(rid),
                     "sc_success": pair[0] if pair else None,
                     "sc_preserve": pair[1] if pair else None,
                     "sc_background": sc.get("background"),
@@ -261,12 +268,19 @@ def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
     print(describe_message(msgs[0]))
     print("]}]")
 
+    # These mirror run() and load_engine() rather than restating them from
+    # memory. The point of a dry run is to show what WOULD happen, so a stale
+    # number here is worse than no number at all.
     print("\n--- sampling params that would be used (not constructed) ---")
     print(f"  n={a.n_samples} temperature={a.temperature} top_p=0.95 "
-          f"max_tokens=32 logprobs=20 seed=1234")
+          f"max_tokens=1024 seed=1234")
+    print("  (max_tokens is 1024 because A.4.3 asks for per-region reasoning "
+          "text before the scores.)")
     print("\n--- engine that would be loaded (not loaded) ---")
-    print(f"  model={a.model} dtype=bfloat16 max_model_len=8192 "
-          f"gpu_memory_utilization=0.90")
+    print(f"  model={a.model} dtype=bfloat16 max_model_len=4096 "
+          f"gpu_memory_utilization={a.gpu_util}")
+    print("  enforce_eager=True max_num_batched_tokens=2048 "
+          "limit_mm_per_prompt={'image': 2, 'video': 0}")
     print(f"  mm_processor_kwargs={{'max_pixels': {MAX_PIXELS}, "
           f"'min_pixels': {MIN_PIXELS}}}")
 
