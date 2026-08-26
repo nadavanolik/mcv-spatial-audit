@@ -142,10 +142,17 @@ def _whitespace_kwargs() -> dict:
         got = getattr(EngineArgs, attr, None)
         if got:
             names |= set(got)
+    # The backend must be named explicitly. vLLM defaults to backend="auto" and
+    # then REFUSES the option: "disable_any_whitespace is only supported for
+    # xgrammar and guidance backends". auto resolves to xgrammar here anyway
+    # (its nanobind objects show up in the shutdown log), so pinning it changes
+    # nothing except making the option legal to pass.
     if "structured_outputs_config" in names:
-        return {"structured_outputs_config": {"disable_any_whitespace": True}}
+        return {"structured_outputs_config": {
+            "backend": "xgrammar", "disable_any_whitespace": True}}
     if "guided_decoding_disable_any_whitespace" in names:
-        return {"guided_decoding_disable_any_whitespace": True}
+        return {"guided_decoding_backend": "xgrammar",
+                "guided_decoding_disable_any_whitespace": True}
     print("WARNING: cannot disable grammar whitespace on this vLLM; "
           "constrained responses may burn their token budget on indentation.")
     return {}
@@ -158,32 +165,46 @@ def _build_engine(model: str, max_len: int, util: float):
     if ws:
         print(f"grammar whitespace: disabled via {list(ws)[0]}")
 
-    return LLM(
-        model=model,
-        dtype="bfloat16",
-        max_model_len=max_len,
-        gpu_memory_utilization=util,
-        # "video": 0 is load-bearing, not tidiness. Qwen3-VL accepts video, and
-        # if the limit is left unset vLLM sizes the encoder cache for a
-        # maximum-length video and profiles with one — a 151250-token budget and
-        # a 4.62GiB allocation on top of 16.8GiB of weights, which OOMs the A10
-        # during profile_run before a single request is served. We only ever
-        # send two images.
-        limit_mm_per_prompt={"image": 2, "video": 0},
-        mm_processor_kwargs={"max_pixels": MAX_PIXELS, "min_pixels": MIN_PIXELS},
-        # Cap the prefill chunk. vLLM defaults this to max_model_len and sizes
-        # the profiling activation peak from it; our prompts are ~1,750 tokens
-        # (2 images ~750 each + ~250 of text), so 4096 is ample headroom and
-        # halves the peak that was pushing the KV cache negative.
-        max_num_batched_tokens=2048,
-        # Eager, not CUDA graphs. Graph capture reserves memory this card does
-        # not have to spare, and it costs ~37s of torch.compile at every engine
-        # start. The throughput it buys is almost all on the decode side, and
-        # our outputs are ~15-32 tokens against a multi-image prefill — so
-        # prefill dominates and eager costs us very little here.
-        enforce_eager=True,
-        **ws,
-    )
+    def _make(extra: dict):
+        return LLM(
+            model=model,
+            dtype="bfloat16",
+            max_model_len=max_len,
+            gpu_memory_utilization=util,
+            # "video": 0 is load-bearing, not tidiness. Qwen3-VL accepts video, and
+            # if the limit is left unset vLLM sizes the encoder cache for a
+            # maximum-length video and profiles with one — a 151250-token budget and
+            # a 4.62GiB allocation on top of 16.8GiB of weights, which OOMs the A10
+            # during profile_run before a single request is served. We only ever
+            # send two images.
+            limit_mm_per_prompt={"image": 2, "video": 0},
+            mm_processor_kwargs={"max_pixels": MAX_PIXELS, "min_pixels": MIN_PIXELS},
+            # Cap the prefill chunk. vLLM defaults this to max_model_len and sizes
+            # the profiling activation peak from it; our prompts are ~1,750 tokens
+            # (2 images ~750 each + ~250 of text), so 4096 is ample headroom and
+            # halves the peak that was pushing the KV cache negative.
+            max_num_batched_tokens=2048,
+            # Eager, not CUDA graphs. Graph capture reserves memory this card does
+            # not have to spare, and it costs ~37s of torch.compile at every engine
+            # start. The throughput it buys is almost all on the decode side, and
+            # our outputs are ~15-32 tokens against a multi-image prefill — so
+            # prefill dominates and eager costs us very little here.
+            enforce_eager=True,
+            **extra,
+        )
+
+    # A rejected whitespace option must not cost a 4-minute model load and a
+    # traceback. Retry once without it and say so -- an unconstrained-whitespace
+    # run still produces data, it just wastes tokens on indentation.
+    try:
+        return _make(ws)
+    except ValueError as e:
+        if ws and "whitespace" in str(e).lower():
+            print(f"WARNING: engine rejected the whitespace option ({e}).\n"
+                  f"         Retrying without it; responses may burn their "
+                  f"token budget on indentation.")
+            return _make({})
+        raise
 
 
 def build_requests(rows: pd.DataFrame, bases: Path, variants: Path) -> tuple[list, list]:
