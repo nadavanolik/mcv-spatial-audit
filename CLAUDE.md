@@ -256,6 +256,41 @@ from source" warning is retired.)
   If more are ever needed, train2017 at the same rate gives ~4,400 — but it is
   19GB and will not fit next to FLUX on the 90G disk.
 
+**The full pipeline runs on real data (2026-08-26, `mcvgpu2025s-0050`).**
+stage 0 -> 1 -> manifest -> 2 -> 3 -> 4 end to end, 100 base specs, 5 edited,
+75 pilot variants rendered, judged and analysed. Four harness bugs were found
+and fixed by doing it, none of which any synthetic test could have surfaced:
+
+1. **`DEFAULT_GPU_UTIL = 0.85` could never have worked.** It sizes the KV
+   cache at **-0.25GiB**. Every smoke test had passed `--gpu-util 0.89`
+   explicitly, so the default was first exercised on the first real run. The
+   window is two-sided and narrow, ~(0.861, 0.901). Now 0.89.
+2. **A repetition loop ate 30% of responses.** The judge repeated one sentence
+   ~110 times to the token cap, mid-JSON. `repetition_penalty` did not hold it.
+3. **Silent coverage loss.** `parse_sc` needs only `id` and `score`, so
+   responses that dropped a region (2 of 3 scored) or omitted
+   `background`/`overall_score` still counted as PARSED. Coverage was 60%.
+4. **Grammar whitespace runaway.** With a JSON schema applied, responses ran to
+   the full 1536-token cap holding ~100 tokens of JSON; the rest was
+   indentation, which is always grammar-valid. `disable_any_whitespace` needs
+   `backend="xgrammar"` named explicitly or vLLM rejects it.
+
+Fixed by schema-constrained decoding (`prefixItems` pinning each slot to a
+region id, `maxLength` on `reasoning`, `required` on the top-level keys) plus
+compact output. Result: **parse rate 100%, region coverage 30/30, background /
+overall / PQ all 100%**, responses down to a 240-token mean.
+`scripts/diagnose_parse.py` reads a scores parquet on CPU and classifies every
+response; run it after any judge change.
+
+**OPEN: throughput.** Constrained decoding cost ~4x — 12.4 tok/s vs ~103.
+Measured on 4 requests, so one-time grammar compilation dominates and the real
+steady-state rate is unknown. Upper-bound projection: `main` at 1,404
+requests/VM would be ~21.9h against a **1.2h/VM budget**. Even unconstrained it
+projects to 5.8h, so this predates the grammar — it is the "max concurrency
+1.24x, effectively serial" problem already noted above, and **a 4B judge
+remains the structural fix**. Measure steady state with `--limit 10` before
+choosing.
+
 **Never executed — expect real bugs here:**
 - `stage0_coco.py` — **selection logic is now laptop-tested** by
   `tests/test_stage0.py` (2026-08-26), which drives `select`/`write_base` with

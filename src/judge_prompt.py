@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from functools import lru_cache
 from typing import Optional
 
 # A.4.3 scores every region on 0-25, not 1-5.
@@ -157,9 +158,27 @@ def _region_item(region_id: int) -> dict:
     }
 
 
+@lru_cache(maxsize=64)
+def _sc_schema_cached(ids: tuple) -> dict:
+    """Cached by region-id tuple.
+
+    Nearly every base has the same shape -- ids (0,1,2) -- so the whole run
+    uses a handful of distinct schemas. xgrammar compiles a grammar per
+    distinct schema and that compilation is not cheap; handing back the SAME
+    object for the same ids gives its cache every chance to hit instead of
+    recompiling an identical grammar thousands of times.
+
+    Returned dicts must therefore be treated as immutable by callers.
+    """
+    return _build_sc_schema(list(ids))
+
+
 def sc_json_schema(region_ids) -> dict:
     """Schema for one SC response scoring exactly `region_ids`."""
-    ids = [int(r) for r in region_ids]
+    return _sc_schema_cached(tuple(int(r) for r in region_ids))
+
+
+def _build_sc_schema(ids: list) -> dict:
     return {
         "type": "object",
         "properties": {
