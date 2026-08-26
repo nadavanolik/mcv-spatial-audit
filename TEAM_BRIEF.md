@@ -95,7 +95,104 @@ symptoms if you deviate.
 | **Analysis** | `stage4_analyze.py` is migrated and tested. Next: sketch the figures against the synthetic fixtures in `tests/test_stage4.py`, which already produce every table. |
 | **Second judge** | Qwen3-VL-4B is downloaded and runs. Next: pick a second *family* (not just scale) and justify it. |
 
-## Setup on a fresh VM
+## ACTION REQUIRED: send Nadav your determinism hash
+
+**Who:** everyone whose VM has not reported a hash yet. Two of five have.
+**Time:** about 10 minutes, most of it waiting on `pip`.
+**Needs a GPU:** no. This is a pure CPU check.
+
+### Why you are being asked
+
+Corrupted image variants are never copied between our VMs — each machine
+regenerates its own share locally from the same seed. That only works if the
+corruption code produces **byte-identical** output everywhere. If your machine
+disagrees with mine by one pixel, scores from your shard cannot be compared
+with scores from mine, and every number in the report is meaningless.
+
+Nobody can tell this went wrong by looking at the results. That is why we check
+it up front.
+
+### Step by step
+
+**1. Start your VM** from the Azure portal and wait for it to report *Running*.
+
+**2. SSH in** from your own machine, substituting your VM's name:
+
+```bash
+ssh student@mcvgpu2025s-00XX
+```
+
+If you do not know the hostname or password, ask in the group — they were
+issued with the VM.
+
+**3. Clone the repo** (skip if you already have it):
+
+```bash
+cd ~
+git clone https://github.com/nadavanolik/mcv-spatial-audit.git
+cd mcv-spatial-audit
+```
+
+If you already cloned it earlier, do this instead so you are on current code:
+
+```bash
+cd ~/mcv-spatial-audit && git pull
+```
+
+**4. Make a virtual environment and activate it.** Do not install into the
+system Python — we have no sudo, and `setup.sh` will refuse:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+Your prompt should now start with `(.venv)`.
+
+**5. Run setup.** Use `judge` if your VM will run the judge (most of you), or
+`core` if you only want to produce the hash and nothing else:
+
+```bash
+bash scripts/setup.sh judge
+```
+
+This installs dependencies (several minutes — vLLM is large), prints the pinned
+library versions, then runs the determinism tests and the hash check.
+
+**6. Send back the last three lines.** You are looking for output like:
+
+```
+host: mcvgpu2025s-00XX
+numpy 1.26.4 cv2 4.11.0 pillow 10.4.0
+...
+all determinism guarantees hold
+CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
+```
+
+**Paste the `numpy/cv2/pillow` line and the `CROSS-VM FIXTURE HASH` line into
+the group.** Both matter — if a hash disagrees, the version line is what tells
+us why.
+
+### What the answer should be
+
+`776feeddd281fa726195bf504c7b19c8`, on `numpy 1.26.4 / cv2 4.11.0 /
+pillow 10.4.0`.
+
+- **Matches, all tests pass** — you are done, nothing else needed.
+- **Hash differs** — do not "fix" it yourself. Post it with your version line.
+  Almost always a pinned library resolved differently, and we need to see which.
+- **A test fails** — post the whole failure. That is a genuine bug and worth
+  finding.
+- **`setup.sh` says no virtualenv is active** — you skipped step 4, or opened a
+  new shell. Re-run `source .venv/bin/activate`.
+- **Two OpenCV packages warning** — post it. A stray `opencv-python` alongside
+  `opencv-python-headless` is a different library and can change the bytes.
+
+*(For reference: on a Windows laptop the hash is `5073799d…` instead. That is
+expected — different platform, different libjpeg. Only the five Linux VMs need
+to agree with each other.)*
+
+## Setup on a fresh VM (general)
 
 ```bash
 git clone <repo> mcv-spatial-audit && cd mcv-spatial-audit
@@ -103,10 +200,8 @@ python -m venv .venv && source .venv/bin/activate
 bash scripts/setup.sh judge          # or editor / coco / core
 ```
 
-Post the hash it prints. **All five must match.**
-
-The editor VM needs its own venv (`.venv-editor`) because diffusers and vLLM
-pin different torch builds — see README.
+The editor VM needs its own **second** venv (`.venv-editor`) because diffusers
+and vLLM pin different torch builds — see README.
 
 ## What's next, in order
 
