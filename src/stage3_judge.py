@@ -466,7 +466,8 @@ def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
     print("  (max_tokens is 1024 because A.4.3 asks for per-region reasoning "
           "text before the scores.)")
     print("\n--- engine that would be loaded (not loaded) ---")
-    print(f"  model={a.model} dtype=bfloat16 max_model_len=4096 "
+    print(f"  model={a.model} dtype=bfloat16 "
+          f"max_model_len={a.max_model_len} "
           f"gpu_memory_utilization={a.gpu_util}")
     print("  enforce_eager=True max_num_batched_tokens=2048 "
           "limit_mm_per_prompt={'image': 2, 'video': 0}")
@@ -492,6 +493,15 @@ def main():
     ap.add_argument("--n-samples", type=int, default=5)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--limit", type=int, default=None, help="pilot mode: cap variants")
+    # max_model_len is the concurrency divisor: vLLM's max concurrency is
+    # KV-cache-tokens / max_model_len. Our prompts are ~950 tokens and outputs
+    # ~300, so 4096 reserves more than double what a request can use and halves
+    # how many fit at once. Exposed so it can be measured rather than argued
+    # about; it must match across VMs like --gpu-util does.
+    ap.add_argument("--max-model-len", type=int, default=4096,
+                    help="context reserved per request (default 4096). Lower "
+                         "raises max concurrency proportionally; must be the "
+                         "same on every VM.")
     ap.add_argument("--gpu-util", type=float, default=DEFAULT_GPU_UTIL,
                     help=f"gpu_memory_utilization (default {DEFAULT_GPU_UTIL}); "
                          "all five VMs must pass the same value")
@@ -517,7 +527,7 @@ def main():
     msgs, meta = build_requests(df, Path(a.bases), Path(a.variants))
     print(f"{len(msgs)} requests x n={a.n_samples}")
 
-    llm = load_engine(a.model, util=a.gpu_util)
+    llm = load_engine(a.model, max_len=a.max_model_len, util=a.gpu_util)
     res = run(llm, msgs, meta, a.n_samples, a.temperature,
               structured=not a.no_structured)
     res["judge"] = a.model

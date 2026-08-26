@@ -282,14 +282,37 @@ overall / PQ all 100%**, responses down to a 240-token mean.
 `scripts/diagnose_parse.py` reads a scores parquet on CPU and classifies every
 response; run it after any judge change.
 
-**OPEN: throughput.** Constrained decoding cost ~4x — 12.4 tok/s vs ~103.
-Measured on 4 requests, so one-time grammar compilation dominates and the real
-steady-state rate is unknown. Upper-bound projection: `main` at 1,404
-requests/VM would be ~21.9h against a **1.2h/VM budget**. Even unconstrained it
-projects to 5.8h, so this predates the grammar — it is the "max concurrency
-1.24x, effectively serial" problem already noted above, and **a 4B judge
-remains the structural fix**. Measure steady state with `--limit 10` before
-choosing.
+**OPEN AND BLOCKING: throughput.** Measured, not projected:
+**58.9s per request** at `--limit 10` versus 56.2s at `--limit 2`. The two
+agree, so grammar *compilation* is amortised and this is steady state — the
+per-region schema cache buys nothing. `main` is **23.0h/VM against a 1.2h
+budget**; even the pilot is 2.5h on one VM.
+
+Two independent causes, and both must be addressed:
+
+| cause | measurement |
+|---|---|
+| grammar decode penalty | 13.5 tok/s constrained vs 102.9 unconstrained = **7.6x** |
+| no batching | KV cache 0.70GiB = 5,072 tokens; `max_model_len` 4096 -> **1.24x concurrency** |
+
+The batching one is arithmetic, not tuning. Max concurrency is
+KV-tokens / max_model_len, so:
+
+| | KV | concurrency |
+|---|---|---|
+| 8B @ 4096 | 0.70GiB | 1.2x |
+| 8B @ 2560 | 0.70GiB | 2.0x |
+| **4B @ 4096** | **8.84GiB** | **15.6x** |
+| **4B @ 2560** | **8.84GiB** | **25.0x** |
+
+An 8B judge leaves 0.70GiB for the cache; a 4B one leaves ~8.8GiB. That is the
+whole difference, and it is why **a 4B judge is the structural fix** — as this
+file has said since before any of it was measured. Our prompts are ~950 tokens
+with ~300 of output, so `max_model_len` 4096 reserves more than double what a
+request can use; `--max-model-len` is now a CLI flag so this can be measured.
+
+Suspected contributor to the 7.6x: `maxLength` on the `reasoning` string forces
+xgrammar down a character-counting path. Worth isolating before accepting it.
 
 **Never executed — expect real bugs here:**
 - `stage0_coco.py` — **selection logic is now laptop-tested** by
