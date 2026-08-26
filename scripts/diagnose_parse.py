@@ -101,6 +101,28 @@ def main() -> int:
         print(resp.groupby(resp.why.str.split(" ").str[0]).n_tokens
               .describe()[["count", "mean", "max"]].round(0).to_string())
 
+    # Coverage is a separate failure from parsing, and stage 3's parse rate
+    # does not see it. parse_sc only needs `id` and `score`, so a response that
+    # silently drops a region -- or omits background/overall_score entirely --
+    # counts as PARSED while leaving those rows empty. Every empty row is a
+    # variant-region cell missing from the design matrix.
+    print("\n=== coverage (of responses that parsed at all) ===")
+    fg = df[df.scored_region_id != "bg"]
+    bg = df[df.scored_region_id == "bg"]
+    per = fg.groupby(key).agg(asked=("scored_region_id", "size"),
+                              got=("sc_success", "count"))
+    if len(per):
+        full = (per.asked == per.got).mean()
+        print(f"  regions scored: {per.got.sum()}/{per.asked.sum()} "
+              f"({per.got.sum() / max(per.asked.sum(), 1):.1%})")
+        print(f"  responses scoring EVERY region asked for: {full:.1%}")
+    if len(bg):
+        print(f"  background present:    {bg.sc_background.notna().mean():.1%}")
+    ov = df.drop_duplicates(subset=key)
+    print(f"  overall_score present: {ov.sc_overall_success.notna().mean():.1%}")
+    pq = ov.pq_naturalness.notna().mean()
+    print(f"  PQ present:            {pq:.1%}")
+
     bad = resp[resp.why != "OK"]
     if bad.empty:
         print("\nAll responses are well formed.")

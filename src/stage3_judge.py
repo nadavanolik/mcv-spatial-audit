@@ -195,12 +195,27 @@ def run(llm, msgs, meta, n_samples: int, temperature: float) -> pd.DataFrame:
     # n=n_samples shares the prefill across all samples. With images, prefill
     # dominates, so this is close to a free 4-5x versus n separate requests.
     #
-    # max_tokens is 1024, not 32: A.4.3 asks for per-region `reasoning` strings
-    # before the scores, so a multi-region response is hundreds of tokens. At 32
-    # every response truncates mid-reasoning and parses as nothing.
+    # max_tokens is large, not 32: A.4.3 asks for per-region `reasoning`
+    # strings before the scores, so a multi-region response is hundreds of
+    # tokens. At 32 every response truncates mid-reasoning and parses as
+    # nothing.
+    # repetition_penalty is load-bearing, not tuning. On the first real run
+    # (2026-08-26) 3 of 10 responses collapsed into a loop -- one repeated
+    # "The motorcycle is now more visible, and it appears to be a dark color..."
+    # about twenty times verbatim until it hit max_tokens mid-JSON and parsed
+    # as nothing. That was the ENTIRE 30% parse failure. Free-running reasoning
+    # inside a JSON field at temperature 0.7 is exactly the setup that invites
+    # it: nothing in the grammar pushes toward closing the string.
+    # 1.05 is mild -- enough to break a verbatim loop, small enough that it
+    # does not distort the score tokens, which are what we actually measure.
+    #
+    # max_tokens 1024 -> 1536: a 5-region response with per-region reasoning
+    # legitimately runs long, and truncation costs the whole response. The
+    # ceiling is max_model_len 4096 minus a ~1,750-token prompt, so 1536 still
+    # leaves headroom.
     sp = SamplingParams(
         n=n_samples, temperature=temperature, top_p=0.95,
-        max_tokens=1024, seed=1234,
+        max_tokens=1536, repetition_penalty=1.05, seed=1234,
     )
     outs = llm.chat(msgs, sp)
 
@@ -327,7 +342,7 @@ def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
     # number here is worse than no number at all.
     print("\n--- sampling params that would be used (not constructed) ---")
     print(f"  n={a.n_samples} temperature={a.temperature} top_p=0.95 "
-          f"max_tokens=1024 seed=1234")
+          f"max_tokens=1536 repetition_penalty=1.05 seed=1234")
     print("  (max_tokens is 1024 because A.4.3 asks for per-region reasoning "
           "text before the scores.)")
     print("\n--- engine that would be loaded (not loaded) ---")
