@@ -124,7 +124,17 @@ def measurement_quality(df: pd.DataFrame, col: str, nf: pd.DataFrame) -> None:
     print(f"  {col}: range {lo:.3f}-{hi:.3f}, {rail:.1%} of values sit on a rail")
 
     floor = float(nf["median"].max()) if len(nf) else float("nan")
-    if rng > 0 and floor == floor:
+    if floor != floor:
+        # NaN, not zero: pandas .std() over a single sample is undefined. That
+        # happens with --n-samples 1, which is the RIGHT way to run this once
+        # the sampling noise is understood -- so say what to use instead rather
+        # than letting a NaN comparison silently render every verdict "BELOW
+        # NOISE", which is exactly what it did on the first greedy run.
+        print("  noise floor is undefined (n_samples=1: no within-variant "
+              "spread to measure).")
+        print("  Judge effects against the between-variant SD below, and "
+              "against the tie rate.")
+    elif rng > 0:
         print(f"  noise floor {floor:.3f} = {floor / rng:.1%} of that range")
         print(f"  smallest detectable effect ~{2 * floor:.3f} "
               f"({2 * floor / rng:.1%} of range)")
@@ -189,6 +199,36 @@ def drop_floored(d: pd.DataFrame, thresh: float) -> pd.DataFrame:
     print(f"  --min-control {thresh}: kept {len(d)}/{before} rows "
           f"({len(d) / max(before, 1):.1%})")
     return d
+
+
+def sensitivity(d: pd.DataFrame) -> pd.DataFrame:
+    """How often does the score MOVE AT ALL when we corrupt a region?
+
+    The most direct question the audit can ask, and under greedy decoding it
+    needs no statistics: delta == 0 exactly means the judge returned the same
+    number for the clean image and the damaged one.
+
+    It matters more than AUROC here. AUROC asks whether the corrupted region
+    ranks below the others, which is vacuous when neither moved -- a judge that
+    never reacts scores 0.5, and so does one that reacts at random. The tie rate
+    tells those apart, and on the first greedy pilot it was 60-81%.
+    """
+    d = d[d.scored_region_id != BG]
+    rows = []
+    for (judge, corr, sev), g in d.groupby(["judge", "corruption", "severity"]):
+        tgt, oth = g[g.is_target], g[~g.is_target]
+
+        def frac(x, op):
+            return float(op(x.delta).mean()) if len(x) else float("nan")
+
+        rows.append(dict(
+            judge=judge, corruption=corr, severity=sev, n_target=len(tgt),
+            target_unchanged=frac(tgt, lambda v: v == 0),
+            target_dropped=frac(tgt, lambda v: v < 0),
+            target_rose=frac(tgt, lambda v: v > 0),
+            other_unchanged=frac(oth, lambda v: v == 0),
+        ))
+    return pd.DataFrame(rows)
 
 
 def localization(d: pd.DataFrame) -> pd.DataFrame:
@@ -342,6 +382,23 @@ def main():
         d = drop_floored(d, a.min_control)
     d.to_parquet(out / "deltas.parquet")
 
+    print("\n=== does the score move at all? (delta == 0 exactly) ===")
+    sens = sensitivity(d)
+    if len(sens):
+        print(sens.round(3).to_string(index=False))
+        sens.to_csv(out / "sensitivity.csv", index=False)
+        worst = sens.target_unchanged.max()
+        if worst == worst and worst > 0.5:
+            print(f"\n  Up to {worst:.0%} of DAMAGED regions get a score "
+                  f"identical to their clean")
+            print("  control. Where the score never moves, no ranking metric "
+                  "below can say")
+            print("  anything: AUROC 0.5 there means 'did not react', not "
+                  "'reacted in the")
+            print("  wrong place'. Report the tie rate alongside every AUROC.")
+    else:
+        print("  n/a")
+
     print("\n=== localization AUROC by severity ===")
     for c in cols:
         dc = d if c == a.col else delta_table(usable(df, c), c)
@@ -382,7 +439,10 @@ def main():
     for judge, g in d[d.is_target].groupby("judge"):
         eff = abs(g.delta.mean())
         f = floor.get(judge, float("nan"))
-        if f == 0:
+        if f != f:
+            verdict = ("floor undefined (n_samples=1) - judge this by the tie "
+                       "rate and the between-variant SD above")
+        elif f == 0:
             # Greedy decoding: repeated samples are identical, so a zero SD says
             # nothing about whether the effect is real. Declaring "ABOVE noise"
             # here would be an artefact of the sampling config, not a result.
