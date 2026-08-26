@@ -28,7 +28,8 @@ from tqdm import tqdm
 
 from . import judge_prompt
 from .judge_prompt import (build_sc_prompt, build_pq_prompt, parse_sc, parse_pq,
-                           region_reward, sc_json_schema, pq_json_schema)
+                           region_reward, sc_json_schema, pq_json_schema,
+                           REASONING_MODES)
 from .schema import shard
 
 # 768^2 = 589,824. Chosen to be a no-op on our actual data while shrinking the
@@ -287,7 +288,7 @@ def _structured_kwargs(kind: str, schema: dict) -> dict:
 
 
 def run(llm, msgs, meta, n_samples: int, temperature: float,
-        structured: bool = True) -> pd.DataFrame:
+        structured: bool = True, reasoning: str = "bounded") -> pd.DataFrame:
     from vllm import SamplingParams
 
     # n=n_samples shares the prefill across all samples. With images, prefill
@@ -316,7 +317,17 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
 
     kind = structured_kind() if structured else None
     if kind:
-        print(f"structured output: {kind} (JSON schema per request)")
+        print(f"structured output: {kind} (JSON schema per request, "
+              f"reasoning={reasoning})")
+    elif not structured:
+        # Distinct from "unavailable": this is the operator's choice. The old
+        # message claimed the API was missing either way, which is a lie when
+        # --no-structured was passed and sent you looking for the wrong bug.
+        print("structured output: DISABLED by --no-structured. Expect dropped "
+              "regions and missing
+"
+              "         background/overall_score; check coverage with "
+              "scripts/diagnose_parse.py.")
     else:
         print("WARNING: this vLLM exposes no structured-output API, so "
               "responses are unconstrained.\n"
@@ -332,8 +343,8 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
     for m in meta:
         kw = dict(base)
         if kind:
-            schema = (pq_json_schema() if m["kind"] == "pq"
-                      else sc_json_schema(m["region_ids"]))
+            schema = (pq_json_schema(reasoning) if m["kind"] == "pq"
+                      else sc_json_schema(m["region_ids"], reasoning))
             kw.update(_structured_kwargs(kind, schema))
         sps.append(SamplingParams(**kw))
 
@@ -505,6 +516,11 @@ def main():
     ap.add_argument("--gpu-util", type=float, default=DEFAULT_GPU_UTIL,
                     help=f"gpu_memory_utilization (default {DEFAULT_GPU_UTIL}); "
                          "all five VMs must pass the same value")
+    ap.add_argument("--reasoning", default="bounded", choices=REASONING_MODES,
+                    help="how the schema expresses the free-text reasoning "
+                         "field: bounded (maxLength), free (unbounded string), "
+                         "or none (omit it). Grammar cost dominates the run, "
+                         "and this is the only unbounded construct in it.")
     ap.add_argument("--no-structured", action="store_true",
                     help="disable JSON-schema-constrained decoding. Only for "
                          "measuring what the constraint is worth -- "
@@ -529,7 +545,7 @@ def main():
 
     llm = load_engine(a.model, max_len=a.max_model_len, util=a.gpu_util)
     res = run(llm, msgs, meta, a.n_samples, a.temperature,
-              structured=not a.no_structured)
+              structured=not a.no_structured, reasoning=a.reasoning)
     res["judge"] = a.model
 
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)

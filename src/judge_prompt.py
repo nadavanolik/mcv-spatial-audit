@@ -142,24 +142,55 @@ _SCORE_PAIR = {
 }
 
 
-def _region_item(region_id: int) -> dict:
+# How the free-text `reasoning` field is expressed in the schema. It is the
+# only unbounded thing in the grammar, and grammar cost dominates the run:
+# constrained decoding measured 21x slower than unconstrained (13.5 vs 265.9
+# output tok/s), while a 4B model with 26x the concurrency was 2% faster --
+# so the mask computation, not batching, is the whole bottleneck.
+#
+#   bounded  maxLength on the string. Safest against runaway loops, and the
+#            prime suspect for the slowdown: a length bound makes xgrammar
+#            track a character counter, which multiplies FSM states.
+#   free     a plain string. Loops are then held off only by
+#            repetition_penalty and max_tokens.
+#   none     no reasoning field at all. Fastest, and we never read the field --
+#            but A.4.3 asks for reasoning BEFORE the scores, and reasoning
+#            first plausibly changes the score, so dropping it audits a
+#            modified protocol. State it in the report if used.
+REASONING_MODES = ("bounded", "free", "none")
+
+
+def _reasoning_prop(mode: str):
+    if mode == "none":
+        return None
+    if mode == "free":
+        return {"type": "string"}
+    return {"type": "string", "maxLength": REASONING_MAXLEN}
+
+
+def _with_reasoning(props: dict, required: list, mode: str) -> tuple:
+    r = _reasoning_prop(mode)
+    if r is not None:
+        props["reasoning"] = r
+        required = required + ["reasoning"]
+    return props, required
+
+
+def _region_item(region_id: int, mode: str = "bounded") -> dict:
     """One `edit_region` slot, pinned to a single region id."""
-    return {
-        "type": "object",
-        "properties": {
-            "id": {"type": "integer", "const": int(region_id)},
-            "label": {"type": "string", "maxLength": 60},
-            "bbox_2d": {"type": "array", "items": {"type": "integer"},
-                        "minItems": 4, "maxItems": 4},
-            "score": _SCORE_PAIR,
-            "reasoning": {"type": "string", "maxLength": REASONING_MAXLEN},
-        },
-        "required": ["id", "score", "reasoning"],
+    props = {
+        "id": {"type": "integer", "const": int(region_id)},
+        "label": {"type": "string", "maxLength": 60},
+        "bbox_2d": {"type": "array", "items": {"type": "integer"},
+                    "minItems": 4, "maxItems": 4},
+        "score": _SCORE_PAIR,
     }
+    props, required = _with_reasoning(props, ["id", "score"], mode)
+    return {"type": "object", "properties": props, "required": required}
 
 
 @lru_cache(maxsize=64)
-def _sc_schema_cached(ids: tuple) -> dict:
+def _sc_schema_cached(ids: tuple, mode: str) -> dict:
     """Cached by region-id tuple.
 
     Nearly every base has the same shape -- ids (0,1,2) -- so the whole run
@@ -170,15 +201,17 @@ def _sc_schema_cached(ids: tuple) -> dict:
 
     Returned dicts must therefore be treated as immutable by callers.
     """
-    return _build_sc_schema(list(ids))
+    return _build_sc_schema(list(ids), mode)
 
 
-def sc_json_schema(region_ids) -> dict:
+def sc_json_schema(region_ids, reasoning: str = "bounded") -> dict:
     """Schema for one SC response scoring exactly `region_ids`."""
-    return _sc_schema_cached(tuple(int(r) for r in region_ids))
+    if reasoning not in REASONING_MODES:
+        raise ValueError(f"reasoning must be one of {REASONING_MODES}")
+    return _sc_schema_cached(tuple(int(r) for r in region_ids), reasoning)
 
 
-def _build_sc_schema(ids: list) -> dict:
+def _build_sc_schema(ids: list, mode: str) -> dict:
     return {
         "type": "object",
         "properties": {
@@ -192,7 +225,7 @@ def _build_sc_schema(ids: list) -> dict:
             "edit_region": {
                 "type": "array",
                 "minItems": len(ids), "maxItems": len(ids),
-                "prefixItems": [_region_item(i) for i in ids],
+                "prefixItems": [_region_item(i, mode) for i in ids],
                 "items": {
                     "type": "object",
                     "properties": {
@@ -214,31 +247,24 @@ def _build_sc_schema(ids: list) -> dict:
                     "required": ["id", "score", "reasoning"],
                 },
             },
-            "background": {
-                "type": "object",
-                "properties": {
-                    "score": {"type": "integer",
-                              "minimum": SCORE_MIN, "maximum": SCORE_MAX},
-                    "reasoning": {"type": "string",
-                                  "maxLength": REASONING_MAXLEN},
-                },
-                "required": ["score", "reasoning"],
-            },
+            "background": _bg_item(mode),
             "overall_score": _SCORE_PAIR,
         },
         "required": ["edit_region", "background", "overall_score"],
     }
 
 
-def pq_json_schema() -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "score": _SCORE_PAIR,
-            "reasoning": {"type": "string", "maxLength": REASONING_MAXLEN},
-        },
-        "required": ["score", "reasoning"],
-    }
+def _bg_item(mode: str) -> dict:
+    props = {"score": {"type": "integer",
+                       "minimum": SCORE_MIN, "maximum": SCORE_MAX}}
+    props, required = _with_reasoning(props, ["score"], mode)
+    return {"type": "object", "properties": props, "required": required}
+
+
+def pq_json_schema(reasoning: str = "bounded") -> dict:
+    props = {"score": _SCORE_PAIR}
+    props, required = _with_reasoning(props, ["score"], reasoning)
+    return {"type": "object", "properties": props, "required": required}
 
 
 def _extract_json(text: str) -> Optional[dict]:
