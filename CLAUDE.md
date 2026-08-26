@@ -472,6 +472,31 @@ project set out to look for. But it needs real data behind it.
 The judge scores an edit **it was shown no images of** — text-only returns all
 25s. Worth a line in the report.
 
+## Session close-out, 2026-08-26
+
+The pipeline runs end to end on real data. What remains is the experiment, not
+the harness.
+
+**Do next, in order:**
+1. Editor VM: edit the remaining 95 bases (~5h at 189s each), then
+   `tar czf bases.tar.gz -C data bases` and upload. Everything downstream is
+   blocked on that tarball.
+2. Run the pilot and read the axis table (`sc_preserve` vs `sc_success` on the
+   targeted region). That is the go/no-go on the top risk.
+3. Cross-VM determinism hash from the three VMs that have not reported it.
+4. `main`: ~3.1h/VM, sharded five ways.
+
+**Do not re-litigate** (each was measured, not argued):
+- `--gpu-util` 0.89; the window is (0.861, 0.901) and both ends fail.
+- Stage 1 `--offload sequential`; model-level cannot fit, ever.
+- `--reasoning free`; `bounded` costs 7.5x for identical quality.
+- Schema-constrained decoding is mandatory — unconstrained covers ~43% of
+  regions while reporting a healthy parse rate.
+- A 4B judge does NOT fix throughput. 26x concurrency bought 2%.
+
+**Still unverified:** `run_shard.sh` end to end; determinism on VMs 3-5; stage 4
+against real multi-base data (it has only seen 2- and 10-variant smoke runs).
+
 ## Open TODOs
 
 1. ~~Placeholder prompt~~ **DONE (2026-08-25).** `src/judge_prompt.py` now

@@ -1,7 +1,10 @@
 # Team brief — where we are and what's next
 
-Short version: the pipeline is scaffolded and the hardware questions are
-answered. What's left is running it.
+Updated 2026-08-26.
+
+Short version: **the pipeline runs end to end on real data.** All five stages,
+100% parse rate, 100% region coverage, throughput understood and affordable.
+What's left is running the experiment and writing it up.
 
 ## What we're actually testing (refresher)
 
@@ -26,17 +29,6 @@ things can happen:
 Which one we observe is the result. Either answer is publishable: we either
 validate an assumption four papers rest on, or find a hole in it.
 
-## Hardware — the answers
-
-Each of our five VMs has a **full A10 24GB**, ~440GB RAM, 36 cores, 90G of
-writable disk, and **no sudo**. Important discoveries:
-
-- The 8B judge fits in bf16 on one GPU. The project is viable as proposed.
-- **We can't use fp8** — the A10 is too old an architecture for those kernels.
-- **`/datashare` is read-only and there's no shared filesystem between VMs.**
-  This shaped the whole design.
-- `/mnt` is root-owned. `/dev/shm` (217GB, RAM-backed) is our scratch space.
-
 ## The design, in one idea
 
 We can't pass gigabytes of images between five disconnected machines with 90G
@@ -49,56 +41,102 @@ plus a few MB of manifests and scores. That's it.
 
 This only works if the corruption is byte-identical everywhere, so there's a
 test suite enforcing it and a script that prints a hash we all need to match.
+Two VMs have confirmed `776feeddd281fa726195bf504c7b19c8`. **Three still need
+to.**
 
-## What's already done
+## What is done and verified
 
-- Full pipeline scaffolded: COCO filter → editing → manifest → corruption →
-  judging → analysis. Repo is runnable.
-- Determinism test suite written **and passing** (repeatability, seed
-  sensitivity, order independence, spatial locality, area monotonicity).
-- **Our biggest stated risk is solved.** The proposal said no public benchmark
-  has multi-region annotations — but COCO's instance segmentation gives us
-  named, pixel-accurate, non-overlapping masks, and the category names generate
-  the instructions too. That's an afternoon of filtering, not a week of
-  annotation.
-- **Caught a scoping error.** Our proposal claims ~1,000 variants, but the
-  design matrix as written expands to 24,800 variants and ~99,200 judge calls —
-  5× over budget. `config.yaml` now has a `main` profile sized correctly
-  (~4,400 variants, ~1.2h per VM) plus a tiny `pilot` profile.
+Everything below has actually been executed, not just written.
+
+- **Stage 0 (COCO filter).** 187 of val2017's 5,000 images qualify (3–5
+  distinct instructable categories at 2–25% area), mean 3.19 regions each. That
+  covers `main`'s 100 bases with room to spare. `--survey` reports this from the
+  annotations file alone, before you download any images.
+- **Stage 1 (FLUX Kontext editing).** Works. 189s/image. The edit follows the
+  instruction and mostly leaves other regions alone. 5 pilot bases are edited.
+- **Stage 2 (corruption).** 75 pilot variants rendered from real edits in 3s.
+- **Stage 3 (vLLM judging).** 100% parse rate, 100% region coverage,
+  ~7.9s/request.
+- **Stage 4 (analysis).** Migrated to the real score columns and verified
+  against three synthetic judges with known behaviour.
+- **The A.4.3 prompt is in, verbatim.** No longer a placeholder.
+
+## What we learned the hard way (read this before touching the VMs)
+
+Each of these cost real time and is now handled in code — but you'll hit the
+symptoms if you deviate.
+
+- **FLUX needs `--offload sequential`, not model-level.** Its transformer is
+  23.8GB in bf16 and an A10-24Q leaves only 21.37GiB free. Model-level offload
+  OOMs before step 1 of 28. This is VRAM, not disk — clearing the cache or
+  unloading a judge changes nothing.
+- **`torch` must be a cu128 build.** `pip install torch` resolves to a CUDA 13
+  wheel, and our driver caps at 12.8; torch then reports "no CUDA device" and
+  hides the reason in a warning. Use
+  `pip install torch --index-url https://download.pytorch.org/whl/cu128`.
+- **`--gpu-util` has a narrow two-sided window, ~(0.861, 0.901).** Too high and
+  vLLM won't start; too low and the KV cache is sized *negative*. The default is
+  0.89. **All five VMs must use the same value** — it changes batch composition,
+  which can perturb logits.
+- **The judge's output must be schema-constrained.** Left free it drops regions
+  and omits `background`, covering only ~43% of what we asked for — while
+  reporting a healthy parse rate. It also falls into verbatim repetition loops
+  that run to the token cap mid-JSON.
+- **Never put `maxLength` in the schema.** It makes xgrammar count characters
+  and costs **7.5×** for no quality gain.
 
 ## Roles
 
-| Role | First task |
+| Role | Status / next task |
 |---|---|
-| **Editor VM** | Download COCO, generate ~100 base edits, upload the tarball. **Everyone else is blocked on this — start first.** |
-| **Judge harness** | Get vLLM + Qwen3-VL-8B running; replace the placeholder prompt with the real one from the paper. |
-| **Corruption + manifest** | Confirm the determinism hash matches across all five VMs. Own `config.yaml`. |
-| **Analysis** | Read `stage4_analyze.py`; sketch the figures before data exists. |
-| **Second judge** | Pick the second VLM family and justify it. Cross-family agreement is itself a finding. |
+| **Editor VM** | Stage 0 + 1 **working**; 5 of 100 bases edited. Next: edit the remaining 95 (~5h), tar `data/bases`, upload to HF Hub. **Everyone else is blocked on that tarball.** |
+| **Judge harness** | vLLM + Qwen3-VL-8B **working**, prompt is the real A.4.3. Next: nothing blocking — help with the pilot. |
+| **Corruption + manifest** | Determinism confirmed on 2 of 5 VMs. Next: get the other three to print the hash. Own `config.yaml`. |
+| **Analysis** | `stage4_analyze.py` is migrated and tested. Next: sketch the figures against the synthetic fixtures in `tests/test_stage4.py`, which already produce every table. |
+| **Second judge** | Qwen3-VL-4B is downloaded and runs. Next: pick a second *family* (not just scale) and justify it. |
 
-Once base edits exist, everyone runs `SHARD=k bash scripts/run_shard.sh`.
+## Setup on a fresh VM
 
-## This week
+```bash
+git clone <repo> mcv-spatial-audit && cd mcv-spatial-audit
+python -m venv .venv && source .venv/bin/activate
+bash scripts/setup.sh judge          # or editor / coco / core
+```
 
-1. Pick roles. Nothing parallelizes until this happens.
-2. Everyone: clone the repo, then one command — `bash scripts/setup.sh <role>`
-   (`judge` for most of you, `editor` for whoever runs stage 1, `coco` for
-   whoever runs stage 0). It installs your dependencies and finishes by
-   printing a hash. Post it. **All five must match.**
-3. Someone find the real SFReward prompt in arXiv:2606.26872's appendix. It's a
-   hard dependency and currently a placeholder in the code.
-4. **Run the pilot end to end** — 5 images, ~240 requests, minutes. Then look at
-   the score histogram.
+Post the hash it prints. **All five must match.**
 
-Point 4 is the one that matters. If the judge hands out 4/5 to every region
-regardless of what we did to the image, there's no signal to measure and we need
-to redesign — with four weeks left, not one. Everything else is plumbing.
+The editor VM needs its own venv (`.venv-editor`) because diffusers and vLLM
+pin different torch builds — see README.
+
+## What's next, in order
+
+1. **Finish the base edits** (editor VM, ~5h for the remaining 95). Everything
+   downstream waits on this.
+2. **Run the pilot and look at the numbers.** `config.yaml`'s `pilot` profile is
+   now `[none, blur, remove]` — `remove` is there because it is the only
+   corruption the judge visibly reacted to on synthetic data, and `blur` is the
+   contrast case. A pilot of only `blur` would have told us nothing.
+3. **Cross-VM hash from the remaining three machines.**
+4. **`main` run**: ~3.1h/VM, sharded five ways.
+5. Second judge family; nuisance + exploitability tests; figures; LaTeX.
+
+## The open scientific question
+
+On synthetic images the judge reacted to `remove` (a 10-point drop) and **did
+not move at all** for blur, JPEG or noise at any severity. If that holds on real
+COCO edits, the finding is that the reward tracks *semantic* change but is blind
+to *degradation* — which is a real result, and precisely the kind of hole this
+project set out to look for.
+
+It is not confirmed. Flat synthetic squares are far out of distribution, and the
+pilot on real textured edits is what decides it. That is the single
+highest-value thing left to learn.
 
 ## Timeline to 30.9
 
-- **Week 1** — setup, pilot, judge histogram. Go/no-go decision.
+- **Week 1 — done.** Setup, pipeline verified end to end, harness bugs fixed.
 - **Week 2** — 100 bases edited and shipped; manifest frozen; localization +
-  redundancy results.
+  redundancy on `main`.
 - **Week 3** — second judge family; nuisance + exploitability tests.
 - **Week 4** — figures, LaTeX, repo cleanup.
 - **Week 5** — buffer and the 5-minute talk. Don't plan work here.

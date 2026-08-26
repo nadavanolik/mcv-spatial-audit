@@ -16,6 +16,9 @@ Constraints baked into the code:
 | `/mnt` root-owned | `HF_HOME` lives in `$HOME`, not `/mnt` |
 | No sudo | `opencv-python-headless` (GUI build needs `libGL.so.1` → apt); no system packages anywhere |
 | A10 = SM 8.6 | bf16, **not** fp8 — fp8 kernels need SM 8.9+ |
+| A10-24Q leaves 21.37 of 23.72GiB free | `--gpu-util` has a narrow two-sided window ~(0.861, 0.901); default **0.89**, same on every VM |
+| FLUX transformer is 23.8GB in bf16 | Stage 1 needs **sequential** CPU offload; model-level offload cannot fit and OOMs at step 0 |
+| Driver caps at CUDA 12.8 | `torch` must be a **cu128** build; plain `pip install torch` fetches a cu13 wheel that reports "no CUDA device" |
 | 90G disk | VMs are **role-specialised**: the editor VM never holds judges, judge VMs never hold the editor |
 | `/dev/shm` = 217G, mode 1777 | Scratch for regenerated variants |
 
@@ -66,25 +69,56 @@ stage 3  judging (vLLM)     GPU     per-VM   -> out/scores_shard{k}.parquet
 stage 4  analysis           CPU     once     -> out/analysis/
 ```
 
+Measured on one A10 (2026-08-26): stage 1 **189s/image**, stage 3
+**7.9s/request** — `main` is ~3.1h/VM sharded five ways.
+
 Stage 2 is a pure function of `(base edit, mask, manifest row)`, which is why
 the multi-gigabyte corrupted set never crosses the network. Stage 1 is **not**
 reproducible from a seed — diffusion drifts across library versions — so its
 output is an immutable artefact generated exactly once.
 
-## Run the pilot first
+## Check before you spend
+
+Every expensive stage has a cheap dry run that fetches no weights and needs no
+GPU. Use them — each was added after the expensive path failed for a reason the
+cheap one could have caught.
+
+```bash
+python -m src.stage0_coco --coco .../instances_val2017.json --survey   # yield, no images needed
+python -m src.stage1_edit --preflight        # API, auth, gating, disk, VRAM fit
+python -m src.stage3_judge ... --dry-run     # builds every request, never imports vLLM
+python -m scripts.diagnose_parse --scores out/scores_shard0.parquet    # why responses failed
+```
+
+## Editor VM: a second venv
+
+diffusers and vLLM pin different torch builds, so the editor cannot share the
+judge's environment:
+
+```bash
+python -m venv .venv-editor && source .venv-editor/bin/activate
+pip install -r requirements-editor.txt
+pip install --force-reinstall torch --index-url https://download.pytorch.org/whl/cu128
+hf auth login        # FLUX.1-Kontext-dev is gated; accept the licence on its model page
+python -m src.stage1_edit --preflight
+python -m scripts.smoke_edit                 # one real edit on a synthetic image
+```
+
+## Run the pilot
 
 ```bash
 python -m src.stage0_coco --coco data/coco/annotations/instances_val2017.json \
-    --images data/coco/val2017 --out data/bases --n 5
-python -m src.stage1_edit --bases data/bases --limit 5
+    --images data/coco/val2017 --out data/bases --n 100
+python -m src.stage1_edit --limit 5          # ~190s per image
 python -m src.build_manifest --profile pilot
 SHARD=0 OF=1 bash scripts/run_shard.sh
+python -m src.stage4_analyze --scores 'out/scores_shard*.parquet' --all-readouts
 ```
 
-~240 requests, minutes to run. **Look at the printed score histogram before
-doing anything else.** If the judge returns 4/5 for every region regardless of
-damage, the audit has no signal to measure and you need to redesign in week 1,
-not week 4. That is the single highest-value thing you can learn right now.
+**Look at the axis table before anything else.** Corruption should push
+`sc_preserve` down while `sc_success` holds — the edit still follows the
+instruction, it is just damaged. If neither moves, the audit has no signal to
+measure and you need to know in week 1, not week 4.
 
 ## Role split
 
