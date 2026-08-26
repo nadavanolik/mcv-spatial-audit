@@ -119,8 +119,44 @@ def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL)
         raise
 
 
+def _whitespace_kwargs() -> dict:
+    """Forbid arbitrary whitespace in grammar-constrained output.
+
+    vLLM defaults StructuredOutputsConfig(disable_any_whitespace=False), and
+    unrestricted whitespace is ALWAYS grammar-valid -- so a constrained model
+    can emit newlines and indentation indefinitely without ever violating the
+    schema. On the first schema-constrained run every SC response ran to the
+    full 1536-token cap while containing barely 100 tokens of actual JSON, with
+    stray commas sitting on their own indented lines. Compact output removes
+    the escape hatch.
+
+    The option was renamed across versions, so pick by what EngineArgs
+    actually has rather than guessing.
+    """
+    try:
+        from vllm.engine.arg_utils import EngineArgs
+    except ImportError:
+        return {}
+    names: set = set()
+    for attr in ("__dataclass_fields__", "__struct_fields__"):
+        got = getattr(EngineArgs, attr, None)
+        if got:
+            names |= set(got)
+    if "structured_outputs_config" in names:
+        return {"structured_outputs_config": {"disable_any_whitespace": True}}
+    if "guided_decoding_disable_any_whitespace" in names:
+        return {"guided_decoding_disable_any_whitespace": True}
+    print("WARNING: cannot disable grammar whitespace on this vLLM; "
+          "constrained responses may burn their token budget on indentation.")
+    return {}
+
+
 def _build_engine(model: str, max_len: int, util: float):
     from vllm import LLM
+
+    ws = _whitespace_kwargs()
+    if ws:
+        print(f"grammar whitespace: disabled via {list(ws)[0]}")
 
     return LLM(
         model=model,
@@ -146,6 +182,7 @@ def _build_engine(model: str, max_len: int, util: float):
         # our outputs are ~15-32 tokens against a multi-image prefill — so
         # prefill dominates and eager costs us very little here.
         enforce_eager=True,
+        **ws,
     )
 
 

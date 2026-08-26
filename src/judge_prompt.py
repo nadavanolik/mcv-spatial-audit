@@ -130,7 +130,9 @@ def build_pq_prompt() -> str:
 # in 0-25 remains reachable, so what the judge thinks is unaffected -- only its
 # ability to wander off mid-sentence. A.4.3 asks for a "brief reason" already;
 # this enforces what the prompt requests rather than adding a new demand.
-REASONING_MAXLEN = 200
+# 120, not 200. Under a grammar the model spends its budget differently, and
+# reasoning is the one field we never read -- only `score` matters.
+REASONING_MAXLEN = 120
 
 _SCORE_PAIR = {
     "type": "array",
@@ -139,15 +141,39 @@ _SCORE_PAIR = {
 }
 
 
+def _region_item(region_id: int) -> dict:
+    """One `edit_region` slot, pinned to a single region id."""
+    return {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer", "const": int(region_id)},
+            "label": {"type": "string", "maxLength": 60},
+            "bbox_2d": {"type": "array", "items": {"type": "integer"},
+                        "minItems": 4, "maxItems": 4},
+            "score": _SCORE_PAIR,
+            "reasoning": {"type": "string", "maxLength": REASONING_MAXLEN},
+        },
+        "required": ["id", "score", "reasoning"],
+    }
+
+
 def sc_json_schema(region_ids) -> dict:
     """Schema for one SC response scoring exactly `region_ids`."""
     ids = [int(r) for r in region_ids]
     return {
         "type": "object",
         "properties": {
+            # prefixItems pins slot k to region ids[k], rather than letting
+            # any slot hold any id. With a bare enum + minItems the model
+            # scored region 0, was then forced to open a second object with
+            # nothing telling it which region that was, and produced filler
+            # ("label": "AI generated"). Forcing a count without forcing an
+            # identity asks the model to invent regions; pinning the identity
+            # turns each slot into a well-posed question.
             "edit_region": {
                 "type": "array",
                 "minItems": len(ids), "maxItems": len(ids),
+                "prefixItems": [_region_item(i) for i in ids],
                 "items": {
                     "type": "object",
                     "properties": {
