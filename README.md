@@ -13,7 +13,7 @@ Constraints baked into the code:
 | Constraint | Consequence |
 |---|---|
 | No shared filesystem (`/datashare` is read-only, uid=0) | Artefacts move via HF Hub; corrupted variants are **regenerated**, never transferred |
-| `/mnt` root-owned | `HF_HOME` lives in `$HOME`, not `/mnt` |
+| `/mnt` root-owned | Nothing goes there. HF's default cache is already under `$HOME`, so no override is needed |
 | No sudo | `opencv-python-headless` (GUI build needs `libGL.so.1` → apt); no system packages anywhere |
 | 90G root shared by weights + COCO + edits | **Leave `HF_HOME` unset.** Setting it to a non-default path gives you a second, empty cache and re-downloads checkpoints you already have until the disk fills |
 | A10 = SM 8.6 | bf16, **not** fp8 — fp8 kernels need SM 8.9+ |
