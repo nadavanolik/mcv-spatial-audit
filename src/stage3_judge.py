@@ -240,6 +240,13 @@ def run(llm, msgs, meta, n_samples: int, temperature: float) -> pd.DataFrame:
                     "pq_artifacts": pq[1] if pq else None,
                     "reward": region_reward(sc, rid, pq),
                     "parsed": bool(sc),
+                    # finish_reason and n_tokens distinguish the two ways a
+                    # response fails to parse: truncated at max_tokens (fix by
+                    # raising the cap or shortening the reasoning) versus
+                    # well-terminated but malformed (fix the prompt). Without
+                    # them a low parse rate is just a number you cannot act on.
+                    "finish_reason": getattr(cand, "finish_reason", None),
+                    "n_tokens": len(getattr(cand, "token_ids", ()) or ()),
                     "raw": cand.text,
                 })
     return pd.DataFrame(recs)
