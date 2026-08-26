@@ -324,8 +324,7 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
         # message claimed the API was missing either way, which is a lie when
         # --no-structured was passed and sent you looking for the wrong bug.
         print("structured output: DISABLED by --no-structured. Expect dropped "
-              "regions and missing
-"
+              "regions and missing\n"
               "         background/overall_score; check coverage with "
               "scripts/diagnose_parse.py.")
     else:

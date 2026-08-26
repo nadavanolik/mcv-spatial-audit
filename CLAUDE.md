@@ -282,37 +282,35 @@ overall / PQ all 100%**, responses down to a 240-token mean.
 `scripts/diagnose_parse.py` reads a scores parquet on CPU and classifies every
 response; run it after any judge change.
 
-**OPEN AND BLOCKING: throughput.** Measured, not projected:
-**58.9s per request** at `--limit 10` versus 56.2s at `--limit 2`. The two
-agree, so grammar *compilation* is amortised and this is steady state — the
-per-region schema cache buys nothing. `main` is **23.0h/VM against a 1.2h
-budget**; even the pilot is 2.5h on one VM.
+**OPEN: throughput. The grammar is the bottleneck, NOT batching.** Three
+measurements, 20 requests each, settle it:
 
-Two independent causes, and both must be addressed:
+| config | concurrency | total | out tok/s |
+|---|---|---|---|
+| 8B constrained, mml 4096 | 1.24x | 1178s | 13.5 |
+| 4B constrained, mml 2560 | **26.22x** | **1150s** | 14.1 |
+| 8B **unconstrained**, mml 4096 | 1.24x | **57s** | **265.9** |
 
-| cause | measurement |
-|---|---|
-| grammar decode penalty | 13.5 tok/s constrained vs 102.9 unconstrained = **7.6x** |
-| no batching | KV cache 0.70GiB = 5,072 tokens; `max_model_len` 4096 -> **1.24x concurrency** |
+**26x the concurrency bought 2%.** A 4B judge does not fix throughput, and this
+file asserted that it would from before any of it was measured — the 4B run is
+what disproved it. Constrained decoding is **21x**, and that is the whole gap.
+Unconstrained, `main` is **1.1h/VM and inside budget**; constrained it is 23h.
 
-The batching one is arithmetic, not tuning. Max concurrency is
-KV-tokens / max_model_len, so:
+But unconstrained is not an option on quality: it parses (with
+`repetition_penalty` 1.1) yet region coverage was only ~43%, because the judge
+silently drops regions and omits `background`/`overall_score`.
 
-| | KV | concurrency |
-|---|---|---|
-| 8B @ 4096 | 0.70GiB | 1.2x |
-| 8B @ 2560 | 0.70GiB | 2.0x |
-| **4B @ 4096** | **8.84GiB** | **15.6x** |
-| **4B @ 2560** | **8.84GiB** | **25.0x** |
+The only unbounded construct in the grammar is the free-text `reasoning`
+string, and `maxLength` is the prime suspect — a length bound makes xgrammar
+track a character counter, multiplying FSM states. `--reasoning
+{bounded,free,none}` exists to attribute that cost rather than guess it.
+Sequence to run: `free` (drops maxLength, keeps the field), then `none` (drops
+the field entirely — fastest, but A.4.3 asks for reasoning BEFORE the scores
+and reasoning-first plausibly changes the score, so it audits a modified
+protocol and must be stated in the report).
 
-An 8B judge leaves 0.70GiB for the cache; a 4B one leaves ~8.8GiB. That is the
-whole difference, and it is why **a 4B judge is the structural fix** — as this
-file has said since before any of it was measured. Our prompts are ~950 tokens
-with ~300 of output, so `max_model_len` 4096 reserves more than double what a
-request can use; `--max-model-len` is now a CLI flag so this can be measured.
-
-Suspected contributor to the 7.6x: `maxLength` on the `reasoning` string forces
-xgrammar down a character-counting path. Worth isolating before accepting it.
+If neither recovers the speed, the fallback is a coarser design: fewer
+`n_samples`, or `main` at a lower `n_bases`.
 
 **Never executed — expect real bugs here:**
 - `stage0_coco.py` — **selection logic is now laptop-tested** by
