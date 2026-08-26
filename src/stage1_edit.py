@@ -56,10 +56,33 @@ from tqdm import tqdm
 
 MODEL_ID = "black-forest-labs/FLUX.1-Kontext-dev"
 
-# FLUX.1-Kontext-dev in bf16 is ~24GB of safetensors, and HF_HOME keeps the
-# download alongside the extracted snapshot for part of the transfer. 60GB is
-# the point below which this is likely to fail partway rather than fail fast.
-NEED_GB = 60
+# FLUX.1-Kontext-dev is ~34GB on the Hub: the transformer is ~23.8GB in bf16
+# (12B params), T5-XXL another ~9.5GB, plus CLIP and the VAE. The xet chunk
+# cache adds a few GB of transient overhead during the transfer, so ~40GB is
+# the real peak. 45 leaves working room without blocking a machine that would
+# actually have fitted it - the previous 60 was padding on a guess, and it
+# failed a VM with 59GB free that had ~25GB to spare.
+MODEL_GB = 34
+NEED_GB = 45
+
+
+def driver_cuda_version() -> str | None:
+    """The maximum CUDA version this machine's driver supports, per nvidia-smi.
+
+    torch reports the CUDA it was BUILT against; the driver caps what it can
+    actually run. When a cu13 wheel lands on a 12.x driver, torch simply says
+    `cuda.is_available() is False` and buries the reason in a UserWarning, so
+    the preflight reads as "no GPU" on a machine with a perfectly good A10.
+    """
+    import re
+    import subprocess
+    try:
+        out = subprocess.run(["nvidia-smi"], capture_output=True, text=True,
+                             timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"CUDA Version:\s*([0-9]+\.[0-9]+)", out)
+    return m.group(1) if m else None
 
 
 def load_editor(model_id: str):
@@ -165,8 +188,26 @@ def preflight(root: Path, model_id: str, a) -> int:
               f"{free / 2**30:.2f}GiB free of {total / 2**30:.2f}GiB")
         print("  note offload keeps one submodule resident, so 24GB is ample.")
     elif torch is not None:
-        problems.append("no CUDA device")
+        built = getattr(torch.version, "cuda", None)
+        drv = driver_cuda_version()
         print("  FAIL torch.cuda.is_available() is False")
+        print(f"       torch {torch.__version__} was built for CUDA {built}; "
+              f"this driver supports CUDA {drv or 'unknown'}")
+        if drv and built and int(built.split(".")[0]) > int(drv.split(".")[0]):
+            # pip resolves diffusers/accelerate's bare `torch>=2.0.0` to the
+            # newest wheel, which is now a cu13 build. There is no sudo here to
+            # move the driver, so the wheel has to move instead.
+            tag = "cu" + drv.replace(".", "")
+            problems.append(
+                f"torch is built for CUDA {built} but the driver caps at {drv}")
+            print("       This is a wheel/driver mismatch, not a missing GPU. "
+                  "The driver")
+            print("       cannot be updated without sudo, so install a matching "
+                  "torch:")
+            print(f"         pip install --force-reinstall torch "
+                  f"--index-url https://download.pytorch.org/whl/{tag}")
+        else:
+            problems.append("no CUDA device")
 
     print("\n--- 3. HF auth and gated-repo access ---")
     # FLUX.1-Kontext-dev is gated: the licence must be accepted by the account
@@ -201,17 +242,23 @@ def preflight(root: Path, model_id: str, a) -> int:
         probe = probe.parent
     free_gb = shutil.disk_usage(probe).free / 2**30
     print(f"  {'OK  ' if free_gb >= NEED_GB else 'FAIL'} HF_HOME={hf_home}: "
-          f"{free_gb:.0f}GiB free (need ~{NEED_GB})")
+          f"{free_gb:.0f}GiB free; the model is ~{MODEL_GB}GB, "
+          f"~{NEED_GB}GB wanted with transfer overhead")
     if free_gb < NEED_GB:
-        problems.append(f"only {free_gb:.0f}GiB free for a ~24GB gated download")
+        problems.append(f"only {free_gb:.0f}GiB free for a ~{MODEL_GB}GB download")
         print("       This VM is role-specialised: it must NOT also hold a "
               "judge checkpoint. Clear ~/hf_cache of any Qwen weights.")
 
-    print("\n--- 5. inputs from stage 0 ---")
+    # Stage-0 inputs are tracked separately: they block the real stage-1 run
+    # but NOT scripts/smoke_edit.py, which builds its own synthetic image. One
+    # undifferentiated failure list would send you off to fetch COCO before you
+    # have any evidence the editor loads at all.
+    inputs: list[str] = []
+    print("\n--- 5. inputs from stage 0 (not needed for smoke_edit) ---")
     bj = root / "bases.json"
     if not bj.exists():
-        problems.append(f"missing {bj}")
-        print(f"  FAIL missing {bj} - run stage 0 first")
+        inputs.append(f"missing {bj}")
+        print(f"  MISS {bj} - run stage 0 first")
     else:
         specs = json.loads(bj.read_text())
         if a.limit:
@@ -225,13 +272,13 @@ def preflight(root: Path, model_id: str, a) -> int:
         print(f"       {len(done)} already have edit.png; "
               f"{len(specs) - len(done)} to do")
         if missing_src:
-            problems.append(f"{len(missing_src)} bases missing source.png")
+            inputs.append(f"{len(missing_src)} bases missing source.png")
             print(f"  FAIL {len(missing_src)} missing source.png, "
                   f"e.g. {missing_src[0]}")
         else:
             print("  OK   every base has source.png")
         if no_instr:
-            problems.append(f"{len(no_instr)} bases have an empty instruction")
+            inputs.append(f"{len(no_instr)} bases have an empty instruction")
             print(f"  FAIL {len(no_instr)} empty instructions, e.g. {no_instr[0]}")
         else:
             print("  OK   every base has a non-empty instruction")
@@ -253,10 +300,22 @@ def preflight(root: Path, model_id: str, a) -> int:
 
     print()
     if problems:
-        print(f"PREFLIGHT FAILED - {len(problems)} problem(s):")
+        print(f"BLOCKED - {len(problems)} problem(s) stop everything, "
+              f"including smoke_edit:")
         for p in problems:
             print(f"  - {p}")
+    if inputs:
+        print(f"\nSTAGE 0 NOT READY - {len(inputs)} item(s) stop the real "
+              f"stage-1 run, but NOT smoke_edit:")
+        for p in inputs:
+            print(f"  - {p}")
+    if problems:
         return 1
+    if inputs:
+        print("\nThe editor itself is ready. Run "
+              "`python -m scripts.smoke_edit` now;\nstage 0 only has to exist "
+              "before the real run.")
+        return 0
     print("PREFLIGHT OK - safe to start the download.")
     return 0
 
