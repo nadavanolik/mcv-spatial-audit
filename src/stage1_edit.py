@@ -161,6 +161,37 @@ def _enable_vae_slicing(pipe) -> str:
     return "UNAVAILABLE - neither API present"
 
 
+def _sha(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def edit_state(root: Path, spec: dict) -> str:
+    """"fresh" | "stale" | "missing" for one base's edit.png.
+
+    "stale" means an edit exists but was generated from a different
+    instruction. That happens whenever stage 0 is re-run with changed
+    templates: it overwrites regions.json and instruction.txt in place and
+    leaves edit.png alone. The result is an edited image paired with an
+    instruction it never saw - which produces plausible-looking scores that
+    mean nothing, and which no downstream stage can detect.
+
+    An edit with no edit.json predates this fingerprint and cannot be
+    verified, so it is treated as stale rather than trusted.
+    """
+    d = root / spec["base_id"]
+    if not (d / "edit.png").exists():
+        return "missing"
+    meta_path = d / "edit.json"
+    if not meta_path.exists():
+        return "stale"
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return "stale"
+    return "fresh" if meta.get("instruction_sha") == _sha(spec["instruction"])         else "stale"
+
+
 def provenance(model_id: str, a) -> dict:
     """What it would take to explain these bytes to a reviewer. Diffusion
     output is not seed-reproducible across versions, so this is the closest
@@ -366,11 +397,21 @@ def preflight(root: Path, model_id: str, a) -> int:
         missing_src = [s["base_id"] for s in specs
                        if not (root / s["base_id"] / "source.png").exists()]
         no_instr = [s["base_id"] for s in specs if not s.get("instruction")]
-        done = [s["base_id"] for s in specs
-                if (root / s["base_id"] / "edit.png").exists()]
+        states = [edit_state(root, s) for s in specs]
+        n_fresh = states.count("fresh")
+        n_stale = states.count("stale")
         print(f"  OK   {len(specs)} base specs")
-        print(f"       {len(done)} already have edit.png; "
-              f"{len(specs) - len(done)} to do")
+        print(f"       {n_fresh} already edited and up to date; "
+              f"{states.count('missing')} never edited")
+        if n_stale:
+            # Not a blocker: stage 1 re-edits these automatically. It is called
+            # out because it means stage 0 was re-run with changed
+            # instructions, and anyone who copied data/bases elsewhere in the
+            # meantime is holding edits that no longer match their prompts.
+            print(f"  WARN {n_stale} edit.png are STALE - generated from a "
+                  f"different instruction")
+            print(f"       (or predate edit.json). Stage 1 will regenerate "
+                  f"them; {n_stale} x ~190s.")
         if missing_src:
             inputs.append(f"{len(missing_src)} bases missing source.png")
             print(f"  FAIL {len(missing_src)} missing source.png, "
@@ -449,8 +490,20 @@ def main():
     if a.limit:
         specs = specs[: a.limit]
 
-    todo = [s for s in specs if not (root / s["base_id"] / "edit.png").exists()]
-    print(f"{len(todo)} of {len(specs)} bases still need editing")
+    fresh, stale, missing = [], [], []
+    for spec in specs:
+        state = edit_state(root, spec)
+        (missing if state == "missing" else
+         stale if state == "stale" else fresh).append(spec)
+    todo = missing + stale
+    print(f"{len(fresh)} up to date, {len(missing)} never edited, "
+          f"{len(stale)} STALE (instruction changed since the edit)")
+    if stale:
+        print("  re-editing stale bases. Their edit.png was generated from a "
+              "different instruction:")
+        for spec in stale[:3]:
+            print(f"    {spec['base_id']}: now {spec['instruction'][:60]!r}")
+    print(f"{len(todo)} of {len(specs)} bases need editing")
     if not todo:
         return
 
@@ -479,6 +532,16 @@ def main():
         # and silently invalidates every downstream number.
         out = out.resize(before, Image.LANCZOS)
         out.save(d / "edit.png")
+        # Fingerprint the instruction this edit was actually made from. Stage 0
+        # rewrites regions.json and instruction.txt in place but never deletes
+        # edit.png, so a re-run of stage 0 with changed instructions leaves
+        # every existing edit silently mismatched against the instruction the
+        # judge will be shown. Nothing downstream could detect that.
+        (d / "edit.json").write_text(json.dumps({
+            "instruction": s["instruction"],
+            "instruction_sha": _sha(s["instruction"]),
+            "model": a.model, "steps": a.steps, "guidance": a.guidance,
+        }, indent=2))
         n += 1
         gc.collect()
         torch.cuda.empty_cache()
