@@ -4,8 +4,16 @@ Stage 1 - generate the base edits. Runs ONCE, on the editor VM only.
 Two properties make this stage different from every other:
 
 1. Latency-insensitive. ~200 images, one time. So CPU offload is entirely
-   acceptable: with 440GB of RAM, enable_model_cpu_offload puts a 12B editor
-   on a 24GB A10 at ~15-30s/image. Two hours, overnight, done forever.
+   acceptable: we have 440GB of RAM to stage weights in and only need this to
+   finish overnight, once.
+
+   It must be SEQUENTIAL offload, not model-level. FLUX Kontext's transformer
+   is 23.8GB in bf16 and an A10-24Q leaves only ~21.37GiB free, so
+   `enable_model_cpu_offload` - which makes one whole component resident -
+   OOMs before step 1 of 28. Confirmed on mcvgpu2025s-0050, 2026-08-26.
+   `enable_sequential_cpu_offload` streams submodules and fits; it is much
+   slower per image, so measure with scripts/smoke_edit.py before fixing the
+   base count.
 
 2. NOT reproducible from a seed. Diffusion sampling drifts across library
    versions, attention backends and kernel selection even at fixed seed. So
@@ -17,12 +25,13 @@ Two properties make this stage different from every other:
    `data/bases/stage1_provenance.json` with the model revision and the library
    versions that produced the edits. That file is the reproducibility claim.
 
-TEST IT BEFORE YOU DOWNLOAD 24GB:
+TEST IT BEFORE YOU DOWNLOAD 34GB:
 
     python -m src.stage1_edit --preflight
 
 checks the pipeline class name, its call signature, the offload API, HF auth,
-gated-repo access and free disk - all without fetching a single weight. Then:
+gated-repo access, free disk, and whether the largest component can fit the
+offload mode you asked for - all without fetching a single weight. Then:
 
     python -m scripts.smoke_edit
 
@@ -85,15 +94,58 @@ def driver_cuda_version() -> str | None:
     return m.group(1) if m else None
 
 
-def load_editor(model_id: str):
+def load_editor(model_id: str, offload: str = "sequential"):
+    """Load FLUX Kontext under CPU offload.
+
+    OFFLOAD MODE IS NOT A TUNING KNOB ON THIS HARDWARE - it decides whether the
+    thing runs at all.
+
+    `enable_model_cpu_offload` moves one whole COMPONENT to the GPU at a time.
+    FLUX Kontext's transformer is 11.9B params in bf16 = 23.8GB, and the
+    A10-24Q reports 23.72GiB total with only ~21.37GiB free (the vGPU layer
+    keeps ~2.4GiB permanently). 23.8 > 21.37, so model-level offload OOMs while
+    moving the transformer in, before step 1 of 28. Nothing else is on the card;
+    freeing disk or unloading a judge does not change this.
+
+    `enable_sequential_cpu_offload` moves individual SUBMODULES instead, so the
+    resident set is a few layers rather than the whole transformer. It fits with
+    room to spare. It is much slower - every forward pass streams weights over
+    PCIe, every step, so expect minutes per image rather than seconds - but
+    stage 1 runs once, over ~200 images, and we have 440GB of RAM to stage it
+    in. Measure the real number with scripts/smoke_edit.py before committing to
+    a base count.
+    """
     import torch
     from diffusers import FluxKontextPipeline
     pipe = FluxKontextPipeline.from_pretrained(model_id, torch_dtype=torch.bfloat16)
-    # Model-level offload: keeps one submodule on GPU at a time. Sequential
-    # offload is ~5x slower still but survives even tighter budgets.
-    pipe.enable_model_cpu_offload()
+    if offload == "model":
+        pipe.enable_model_cpu_offload()
+    elif offload == "sequential":
+        pipe.enable_sequential_cpu_offload()
+    else:
+        raise ValueError(f"unknown offload mode {offload!r}")
     _enable_vae_slicing(pipe)
     return pipe
+
+
+def largest_component_gb(model_id: str) -> tuple[float, str]:
+    """Size of the biggest single pipeline component, from the Hub metadata.
+
+    No download: `model_info(files_metadata=True)` returns per-file sizes. This
+    is what tells us whether model-level offload can work BEFORE we spend six
+    minutes fetching 34GB and then OOM on the first step.
+    """
+    from collections import defaultdict
+    from huggingface_hub import HfApi
+    info = HfApi().model_info(model_id, files_metadata=True)
+    by_dir: dict[str, int] = defaultdict(int)
+    for f in info.siblings or []:
+        if f.rfilename.endswith(".safetensors") and f.size:
+            by_dir[f.rfilename.split("/")[0]] += f.size
+    if not by_dir:
+        return 0.0, "unknown"
+    name = max(by_dir, key=by_dir.get)
+    return by_dir[name] / 2**30, name
 
 
 def _enable_vae_slicing(pipe) -> str:
@@ -125,7 +177,7 @@ def provenance(model_id: str, a) -> dict:
     return {
         "model": model_id, "revision": rev,
         "steps": a.steps, "guidance": a.guidance, "max_side": a.max_side,
-        "seed": 0,
+        "offload": getattr(a, "offload", "sequential"), "seed": 0,
         "diffusers": diffusers.__version__,
         "transformers": transformers.__version__,
         "torch": torch.__version__,
@@ -182,11 +234,12 @@ def preflight(root: Path, model_id: str, a) -> int:
         print("  SKIP torch is not installed here. Everything below except "
               "this check is still meaningful on the laptop; run --preflight "
               "again on the editor VM for the GPU line.")
+    free_vram = None
     if torch is not None and torch.cuda.is_available():
         free, total = torch.cuda.mem_get_info()
+        free_vram = free / 2**30
         print(f"  OK   {torch.cuda.get_device_name(0)}: "
-              f"{free / 2**30:.2f}GiB free of {total / 2**30:.2f}GiB")
-        print("  note offload keeps one submodule resident, so 24GB is ample.")
+              f"{free_vram:.2f}GiB free of {total / 2**30:.2f}GiB")
     elif torch is not None:
         built = getattr(torch.version, "cuda", None)
         drv = driver_cuda_version()
@@ -221,6 +274,32 @@ def preflight(root: Path, model_id: str, a) -> int:
         try:
             info = api.model_info(model_id)
             print(f"  OK   {model_id} accessible, revision {info.sha[:12]}")
+
+            # THE CHECK THAT MATTERS, and the one whose absence let a
+            # structurally impossible run download 34GB and then OOM on step 0.
+            # Model-level offload needs the LARGEST single component resident,
+            # not the average one. FLUX Kontext's transformer is 23.8GB in bf16
+            # against 21.37GiB free on an A10-24Q.
+            gb, comp = largest_component_gb(model_id)
+            if gb:
+                print(f"  note largest component is {comp}/ at {gb:.1f}GiB")
+                if free_vram is not None:
+                    fits = gb < free_vram * 0.95
+                    print(f"  {'OK  ' if fits else 'NOTE'} "
+                          f"offload=model needs {gb:.1f}GiB resident vs "
+                          f"{free_vram:.1f}GiB free -> "
+                          f"{'fits' if fits else 'DOES NOT FIT'}")
+                    if not fits and a.offload == "model":
+                        problems.append(
+                            f"offload=model cannot work: {comp} is {gb:.1f}GiB "
+                            f"but only {free_vram:.1f}GiB of VRAM is free")
+                        print("       Use --offload sequential (the default). "
+                              "This is a VRAM limit,")
+                        print("       not a disk limit - freeing disk or "
+                              "unloading a judge changes nothing.")
+                    elif not fits:
+                        print("       offload=sequential streams submodules, "
+                              "so it fits. Slower per image.")
         except Exception as e:
             problems.append(f"cannot access {model_id}: {type(e).__name__}")
             print(f"  FAIL cannot access {model_id}: {type(e).__name__}: "
@@ -295,7 +374,7 @@ def preflight(root: Path, model_id: str, a) -> int:
                       f"source or stage 2 will misalign.")
 
     print("\n--- would run ---")
-    print(f"  model={model_id} dtype=bfloat16 offload=model_cpu_offload")
+    print(f"  model={model_id} dtype=bfloat16 offload={a.offload}")
     print(f"  steps={a.steps} guidance={a.guidance} max_side={a.max_side} seed=0")
 
     print()
@@ -328,6 +407,12 @@ def main():
     ap.add_argument("--guidance", type=float, default=2.5)
     ap.add_argument("--max-side", type=int, default=1024)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--offload", default="sequential",
+                    choices=["sequential", "model"],
+                    help="sequential streams submodules and is the only mode "
+                         "that fits FLUX's 23.8GiB transformer on a 24GB A10; "
+                         "model is faster but needs the whole component "
+                         "resident")
     ap.add_argument("--preflight", action="store_true",
                     help="check the API, auth, gating, disk and inputs without "
                          "downloading any weights, then exit")
@@ -348,7 +433,7 @@ def main():
     if not todo:
         return
 
-    pipe = load_editor(a.model)
+    pipe = load_editor(a.model, offload=a.offload)
 
     t0, n = time.time(), 0
     for s in tqdm(todo, desc="editing"):

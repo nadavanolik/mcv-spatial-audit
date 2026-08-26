@@ -4,11 +4,13 @@ One real FLUX Kontext edit on a synthetic image. Editor VM only.
 The stage-1 counterpart to scripts/smoke_judge.py: needs a loaded model but NO
 project data, so it runs before stage 0 has produced anything. Run
 `python -m src.stage1_edit --preflight` first - that settles the API surface
-without downloading 24GB. This settles whether the thing actually generates.
+without downloading 34GB. This settles whether the thing actually generates.
 
 What it answers, in order of how expensive each is to learn late:
 
-  1. Does the pipeline load under model CPU offload on a 24GB A10 at all?
+  1. Does the pipeline load and RUN under sequential CPU offload on a 24GB
+     A10 at all? (Model-level offload provably cannot: the transformer is
+     23.8GB against ~21.37GiB free.)
   2. Does the edit come back at the SOURCE resolution? Stage 0's masks are at
      source resolution and stage 2 indexes them straight into edit.png, so a
      size mismatch corrupts the wrong pixels and silently invalidates every
@@ -35,7 +37,7 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.stage1_edit import MODEL_ID, _enable_vae_slicing  # noqa: E402
+from src.stage1_edit import MODEL_ID, load_editor  # noqa: E402
 
 # Two squares, well separated. R0 is the one the instruction targets; R1 is the
 # control that must survive untouched.
@@ -71,25 +73,27 @@ def main() -> int:
     ap.add_argument("--size", type=int, default=448)
     ap.add_argument("--n-bases", type=int, default=200,
                     help="extrapolate the wall clock to this many bases")
+    ap.add_argument("--offload", default="sequential",
+                    choices=["sequential", "model"],
+                    help="sequential is the only mode that fits on a 24GB A10")
     ap.add_argument("--out", default="out/smoke_edit",
                     help="where to write source/edit PNGs for eyeballing")
     a = ap.parse_args()
 
     import torch
-    from diffusers import FluxKontextPipeline
 
     ok = True
     src = synthetic_source(a.size)
 
     print("=" * 70)
-    print("1. LOADING (model CPU offload; the download happens once)")
+    print("1. LOADING (CPU offload; the download happens once)")
     print("=" * 70)
+    # Goes through load_editor, not a private copy of it, so the smoke test
+    # exercises the loader stage 1 actually uses -- offload mode included.
     t0 = time.time()
-    pipe = FluxKontextPipeline.from_pretrained(a.model, torch_dtype=torch.bfloat16)
-    pipe.enable_model_cpu_offload()
-    slicing = _enable_vae_slicing(pipe)
-    print(f"  loaded in {time.time() - t0:.0f}s; vae slicing via {slicing}")
-    ok &= check("vae slicing enabled", "UNAVAILABLE" not in slicing, slicing)
+    print(f"  offload={a.offload}")
+    pipe = load_editor(a.model, offload=a.offload)
+    print(f"  loaded in {time.time() - t0:.0f}s")
 
     print("\n" + "=" * 70)
     print("2. ONE EDIT")
