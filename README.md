@@ -15,6 +15,7 @@ Constraints baked into the code:
 | No shared filesystem (`/datashare` is read-only, uid=0) | Artefacts move via HF Hub; corrupted variants are **regenerated**, never transferred |
 | `/mnt` root-owned | `HF_HOME` lives in `$HOME`, not `/mnt` |
 | No sudo | `opencv-python-headless` (GUI build needs `libGL.so.1` → apt); no system packages anywhere |
+| 90G root shared by weights + COCO + edits | **Leave `HF_HOME` unset.** Setting it to a non-default path gives you a second, empty cache and re-downloads checkpoints you already have until the disk fills |
 | A10 = SM 8.6 | bf16, **not** fp8 — fp8 kernels need SM 8.9+ |
 | A10-24Q leaves 21.37 of 23.72GiB free | `--gpu-util` has a narrow two-sided window ~(0.861, 0.901); default **0.89**, same on every VM |
 | FLUX transformer is 23.8GB in bf16 | Stage 1 needs **sequential** CPU offload; model-level offload cannot fit and OOMs at step 0 |
@@ -28,7 +29,6 @@ Constraints baked into the code:
 cd ~ && git clone <repo> mcv_project && cd mcv_project
 python -m venv .venv && source .venv/bin/activate
 
-echo 'export HF_HOME=$HOME/hf_cache'        >> ~/.bashrc
 echo 'export HF_HUB_ENABLE_HF_TRANSFER=1'   >> ~/.bashrc
 source ~/.bashrc
 

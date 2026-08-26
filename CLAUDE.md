@@ -494,6 +494,15 @@ the harness.
   regions while reporting a healthy parse rate.
 - A 4B judge does NOT fix throughput. 26x concurrency bought 2%.
 
+**Disk is the live constraint on `mcvgpu2025s-0050`:** FLUX (~34GB) +
+Qwen3-VL-8B (~16GB) + Qwen3-VL-4B (~9GB) + COCO val2017 (~1GB) + a second venv
+with CUDA wheels, against a 90G root. `run_shard.sh` used to force
+`HF_HOME=$HOME/hf_cache` while every manual run used the default
+`~/.cache/huggingface`, so it re-downloaded a cached 16GB checkpoint into an
+empty second cache and ran the disk out mid-transfer. Fixed: the script now
+inherits `HF_HOME`, reports which cache it will use, and refuses to start if the
+model is uncached with under 25G free. **Do not set `HF_HOME`.**
+
 **Still unverified:** `run_shard.sh` end to end; determinism on VMs 3-5; stage 4
 against real multi-base data (it has only seen 2- and 10-variant smoke runs).
 
