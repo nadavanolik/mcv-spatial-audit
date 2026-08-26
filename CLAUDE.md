@@ -472,6 +472,46 @@ project set out to look for. But it needs real data behind it.
 The judge scores an edit **it was shown no images of** — text-only returns all
 25s. Worth a line in the report.
 
+## PILOT RESULT, 2026-08-26 — inconclusive, and the reason is measurable
+
+75 variants, 5 bases, `[none, blur, remove]`, Qwen3-VL-8B, n=5 @ temperature
+0.7. Parse 99.2%, coverage 99.2%, `run_shard.sh` verified end to end.
+
+**AUROC 0.46-0.52 on every readout. Do NOT report this as "the judge has no
+spatial signal" — the design could not have detected one.**
+
+| | |
+|---|---|
+| noise floor (SD over 5 samples of the SAME input) | **0.363** |
+| reward range | 0.959 |
+| floor as share of range | **37.9%** |
+| smallest detectable effect (2 SD) | 0.727 = **75.8% of range** |
+| largest effect observed | 0.013 = 1.4% |
+| values sitting on a rail (0 or max) | **45.6%** |
+
+Two impossibilities confirm it is noise, not signal: `blur` **raised** the
+targeted region's score (+1.16 phi vs clean), and `remove` severity 3 scored
+**higher** than severity 1 (12.49 vs 10.50).
+
+**Cause: sampling.** `n_samples=5 @ temperature=0.7` was OUR choice to estimate
+a noise floor, not the paper's protocol. The judge's output is bimodal at 0 and
+25, so at 0.7 it flips rails between samples of an identical input and the floor
+swamps any effect. **Next: `--temperature 0 --n-samples 1`** (also 5x cheaper,
+~5 min for the pilot).
+
+**A hypothesis that was WRONG, recorded so nobody re-runs it:** floor effects
+were suspected — 25% of scores are exactly 0, and a region already at 0 cannot
+drop. But `--min-control 0` kept **100%** of rows: the control baseline averages
+5 samples over several control variants, so essentially no control mean lands at
+0. The per-sample zeros do not become baseline zeros. `--min-control` stays in
+stage 4 as a diagnostic, but it is not the problem here.
+
+**What survives the noise:** leave-one-out redundancy **R^2 = 0.57-0.73**
+(sc_preserve highest at 0.734). Region scores co-move strongly within an image.
+Noise *attenuates* correlation, so the true figure is higher than measured —
+this is the one pilot number that points at the "global impression" hypothesis,
+and it is the most interesting result so far.
+
 ## Session close-out, 2026-08-26
 
 The pipeline runs end to end on real data. What remains is the experiment, not

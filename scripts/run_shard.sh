@@ -47,5 +47,12 @@ python -m src.stage3_judge --manifest out/manifest.parquet \
     --bases data/bases --variants "$SCRATCH" --model "$MODEL" \
     --shard "$SHARD" --of "$OF" --out "out/scores_shard${SHARD}.parquet"
 
-rm -rf "$SCRATCH"      # reclaim RAM; regenerating is cheap
+# Reclaim RAM; regenerating is cheap (~3s). Set KEEP_SCRATCH=1 while iterating
+# on stage 3 -- otherwise the next judge run dies on a missing variant and the
+# fix (re-run stage 2) is not obvious from the traceback.
+if [[ -n "${KEEP_SCRATCH:-}" ]]; then
+  echo "KEEP_SCRATCH set; leaving $SCRATCH in place"
+else
+  rm -rf "$SCRATCH"
+fi
 echo "=== done: out/scores_shard${SHARD}.parquet ==="

@@ -563,6 +563,28 @@ def main():
     if not a.out:
         ap.error("--out is required unless --dry-run is given")
 
+    # Check the inputs exist BEFORE decoding any of them. build_requests used to
+    # raise a bare PIL FileNotFoundError on the first missing variant, which
+    # names a hash nobody recognises and never mentions stage 2 -- the usual
+    # cause is run_shard.sh having cleaned /dev/shm at the end of a previous run.
+    pf = preflight(df, Path(a.bases), Path(a.variants))
+    n_missing = sum(len(v) for v in pf["missing"].values())
+    if n_missing:
+        lines = [f"{n_missing} input file(s) missing; nothing was judged."]
+        for kind, paths in pf["missing"].items():
+            if paths:
+                lines.append(f"  {kind}: {len(paths)} missing, e.g. {paths[0]}")
+        if pf["missing"]["variant"]:
+            lines.append("Variants live in /dev/shm and are wiped on reboot, and "
+                         "run_shard.sh deletes them")
+            lines.append("when it finishes. Regenerate them (~3s):")
+            lines.append(f"  python -m src.stage2_corrupt --manifest {a.manifest} "
+                         f"--bases {a.bases} \\")
+            lines.append(f"      --out {a.variants} --shard {a.shard} --of {a.of}")
+        else:
+            lines.append("Run stage 0 and stage 1 first, or point --bases elsewhere.")
+        raise SystemExit("\n".join(lines))
+
     msgs, meta = build_requests(df, Path(a.bases), Path(a.variants))
     print(f"{len(msgs)} requests x n={a.n_samples}")
 
