@@ -225,6 +225,36 @@ it — a failure there must not block the other four VMs.
   from `sys.modules`. This exercises manifest → shard → regions.json → prompt →
   message assembly. It says nothing about whether vLLM accepts those messages.
 
+**Verified on VM `mcvgpu2025s-0050`, 2026-08-26 — stage 1 runs:**
+- **`enable_model_cpu_offload` CANNOT work on an A10 and never could.** It
+  makes one whole *component* resident, and FLUX Kontext's transformer is
+  **23.8GB** in bf16 (download: 9.95 + 9.98 + 3.87) against the **21.37GiB**
+  an A10-24Q leaves free. It OOMed at step 0 of 28 after a clean 34GB fetch.
+  This is VRAM, not disk — unloading a judge or clearing the cache changes
+  nothing. `enable_sequential_cpu_offload` streams submodules and is now the
+  default. Peak VRAM **2.39GiB of ~21GiB**.
+- **191.4s/image at 28 steps.** pilot (5) = 16 min, `main` (100) = 5.3h,
+  `full_cross` (200) = 10.6h. `main` fits an overnight run, so no quantization
+  is needed. If it ever is, the lever is an NF4 transformer (~6GB, resident,
+  removes the PCIe round trip that dominates), **not** fewer steps — the card
+  is 90% idle, not compute-bound.
+- **Kontext returns 1024x1024 for a 448x448 input.** The resize-back-to-source
+  in `stage1_edit` is therefore load-bearing, not defensive: without it every
+  stage-0 mask would index a wrong-sized `edit.png` and stage 2 would corrupt
+  the wrong pixels in every variant.
+- **The editor follows instructions.** Target region `[30,30,200]` ->
+  `[244,4,6]` (redness -85 -> +239); the untouched control moved 15.6 against
+  the target's 144.7. Some global drift exists and will show up in the noise
+  floor.
+- **`pycocotools` ships manylinux wheels** (2.0.11) and needs no compiler. The
+  "builds from source, needs gcc" note in README/requirements-coco is stale.
+- **Stage 0 yield: 187 usable bases from val2017's 5000 images** (3.7%).
+  Histogram of instructable regions per image: `0:2206  1:1883  2:724  3:150
+  4:35  5:2`. 187 covers `main`'s 100 with room to spare; it does not cover
+  `full_cross`'s 200, which is out of scope anyway. Mean 3.21 regions/base.
+  If more are ever needed, train2017 at the same rate gives ~4,400 — but it is
+  19GB and will not fit next to FLUX on the 90G disk.
+
 **Never executed — expect real bugs here:**
 - `stage0_coco.py` — **selection logic is now laptop-tested** by
   `tests/test_stage0.py` (2026-08-26), which drives `select`/`write_base` with
@@ -316,7 +346,35 @@ Settled 2026-08-25 (synthetic squares, real A.4.3 prompt, Qwen3-VL-8B):
   on the targeted region — the full width of the scale. The old placeholder
   prompt was the entire cause of the earlier all-5s result.
 
-### TOP RISK — the judge did not react to corruption at all
+### TOP RISK, NARROWED (2026-08-26): semantic yes, photometric no
+
+Re-ran on `mcvgpu2025s-0050` across all four corruptions. The earlier "the
+judge ignores corruption entirely" was drawn from `noise` alone and was too
+broad. What actually holds:
+
+| corruption | region 0 succ/pres | region 1 (untouched) |
+|---|---|---|
+| clean | 25/25 | 25/25 |
+| **remove** s1 | **20/15** | 25/25 |
+| **remove** s2 | **20/15** | **20/15**  <- leakage |
+| **remove** s3 | **20/15** | 25/25 |
+| blur s1-s3 | 25/25 | 25/25 |
+| jpeg s1-s3 | 25/25 | 25/25 |
+| noise s1-s3 | 25/25 | 25/25 |
+
+**The judge tracks semantic change, not degradation.** `remove` moves it a full
+10 points and moves `success` too (25 -> 20), which is coherent: delete the
+square and the instruction is no longer satisfied. Blur, JPEG and noise return
+a flat 25 at every severity.
+
+Two caveats: the `remove` severity ladder is flat (15/15/15), so the reaction
+is not graded; and the region-1 drop at s2 but not s1 or s3 is non-monotone,
+which reads as instability rather than a clean spatial effect. Still synthetic
+squares — the pilot on real COCO edits is what decides this.
+
+### Original framing (kept for context)
+
+The observation that started it — every cell 25.0 under `noise` only:
 
 Same instruction, correctly applied, then region 0 corrupted with `noise` at
 severities 1/2/3:
