@@ -403,11 +403,35 @@ Settled 2026-08-25 (synthetic squares, real A.4.3 prompt, Qwen3-VL-8B):
   on the targeted region — the full width of the scale. The old placeholder
   prompt was the entire cause of the earlier all-5s result.
 
-### TOP RISK, NARROWED (2026-08-26): semantic yes, photometric no
+### RETIRED (2026-08-26): "semantic yes, photometric no" did NOT replicate
+
+**This was the top risk for a week. The pilot on real COCO edits closed it, and
+the answer was no.** Kept because the synthetic table below is a good example of
+how far out of distribution flat squares are, and because the report should say
+we checked.
+
+Share of damaged regions whose score dropped, greedy, real photographs:
+
+| | blur | remove |
+|---|---|---|
+| severity 1 | 20.0% | **20.0%** |
+| severity 3 | 26.7% | **26.7%** |
+| AUROC | 0.461 | 0.469 |
+
+Identical at matched severities. There is no semantic/photometric split on real
+data — the judge is equally insensitive to both, which is subsumed by the
+stronger pilot finding that it does not respond per region at all.
+
+**Still untested on real data:** `jpeg`, `noise`, `saturate`. The pilot ran only
+`[none, blur, remove]`; `main` includes all five and gives the split a properly
+powered second look. Do not treat it as permanently closed.
+
+Everything below this line is the SYNTHETIC-SQUARES result that motivated the
+hypothesis. It is superseded.
 
 Re-ran on `mcvgpu2025s-0050` across all four corruptions. The earlier "the
 judge ignores corruption entirely" was drawn from `noise` alone and was too
-broad. What actually holds:
+broad. What actually held **on synthetic squares**:
 
 | corruption | region 0 succ/pres | region 1 (untouched) |
 |---|---|---|
@@ -419,15 +443,19 @@ broad. What actually holds:
 | jpeg s1-s3 | 25/25 | 25/25 |
 | noise s1-s3 | 25/25 | 25/25 |
 
-**The judge tracks semantic change, not degradation.** `remove` moves it a full
-10 points and moves `success` too (25 -> 20), which is coherent: delete the
-square and the instruction is no longer satisfied. Blur, JPEG and noise return
-a flat 25 at every severity.
+On synthetic squares the judge appeared to track semantic change and not
+degradation: `remove` moved it a full 10 points, and moved `success` too
+(25 -> 20), while blur, JPEG and noise returned a flat 25 at every severity.
 
-Two caveats: the `remove` severity ladder is flat (15/15/15), so the reaction
-is not graded; and the region-1 drop at s2 but not s1 or s3 is non-monotone,
-which reads as instability rather than a clean spatial effect. Still synthetic
-squares — the pilot on real COCO edits is what decides this.
+**None of that survived contact with real photographs.** See the retirement note
+above. The caveats we flagged at the time were the right ones and they were what
+broke it: flat textureless squares are far out of distribution, the `remove`
+severity ladder was already flat (15/15/15), and the region-1 drop at s2 but not
+s1 or s3 was non-monotone — instability, not a spatial effect.
+
+Worth keeping as a methodological point for the report: a synthetic sanity check
+produced a clean, plausible, entirely wrong hypothesis, and only real data
+caught it.
 
 ### Original framing (kept for context)
 

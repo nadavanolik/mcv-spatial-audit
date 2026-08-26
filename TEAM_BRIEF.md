@@ -237,17 +237,35 @@ and vLLM pin different torch builds — see README.
 4. **`main` run**: ~3.1h/VM, sharded five ways.
 5. Second judge family; nuisance + exploitability tests; figures; LaTeX.
 
-## The open scientific question
+## The question we thought was open — answered, and the answer was no
 
-On synthetic images the judge reacted to `remove` (a 10-point drop) and **did
-not move at all** for blur, JPEG or noise at any severity. If that holds on real
-COCO edits, the finding is that the reward tracks *semantic* change but is blind
-to *degradation* — which is a real result, and precisely the kind of hole this
-project set out to look for.
+**This is resolved. It was the top risk for a week and the pilot closed it.**
 
-It is not confirmed. Flat synthetic squares are far out of distribution, and the
-pilot on real textured edits is what decides it. That is the single
-highest-value thing left to learn.
+On synthetic squares the judge dropped 10 points for `remove` and did not move
+*at all* for blur, JPEG or noise. That suggested the reward tracks **semantic**
+change (an object is gone) while being blind to **photometric** degradation
+(the object is still there, just damaged). It would have been a clean finding.
+
+**It did not replicate on real photographs.** From the pilot's sensitivity
+table, share of damaged regions whose score dropped:
+
+| | blur | remove |
+|---|---|---|
+| severity 1 | 20.0% | **20.0%** |
+| severity 3 | 26.7% | **26.7%** |
+| AUROC | 0.461 | 0.469 |
+
+Identical at matched severities. The judge is equally insensitive to both, so
+there is no semantic/photometric split to report — the synthetic result was an
+artefact of flat, textureless squares, exactly the out-of-distribution confound
+we flagged when we found it.
+
+What replaced it is a better finding: the judge does not respond per region at
+all, for either damage type. See the pilot verdict above.
+
+**Still untested on real data:** `jpeg`, `noise` and `saturate` — the pilot only
+ran `[none, blur, remove]`. `main` includes all five, so the split gets a second,
+properly powered look. Do not assume it stays closed until then.
 
 ## Timeline to 30.9
 
