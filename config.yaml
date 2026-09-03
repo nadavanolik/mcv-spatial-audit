@@ -42,6 +42,7 @@ selection:
   max_regions: 5
   min_area_frac: 0.02
   max_area_frac: 0.25
+  duplicate_area_frac: 0.01
 
 judges:
   # PRIMARY. Not chosen for speed or size -- SFReward IS Qwen3-VL-8B-Instruct

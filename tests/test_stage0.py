@@ -59,9 +59,11 @@ AREA = W * H
 class StubCoco:
     """Implements exactly src.stage0_coco.CocoLike, nothing more.
 
-    `images` is {img_id: [(category_name, area_fraction), ...]}. Masks are
-    solid rectangles sized to the requested area fraction, which is enough for
-    write_base: it only ever multiplies the mask by 255 and writes it.
+    `images` is {img_id: [(category_name, area_fraction[, iscrowd]), ...]}.
+    Masks are solid rectangles sized to the requested area fraction, which is
+    enough for write_base: it only ever multiplies the mask by 255 and writes
+    it. Crowd annotations are returned like any other -- stage 0 asks for the
+    full annotation list and filters them out itself.
     """
 
     def __init__(self, images: dict):
@@ -70,11 +72,13 @@ class StubCoco:
         ann_id = 0
         for img_id, specs in images.items():
             rows = []
-            for name, frac in specs:
+            for spec in specs:
+                name, frac = spec[0], spec[1]
+                crowd = spec[2] if len(spec) > 2 else 0
                 side = int(np.sqrt(frac * AREA))
                 rows.append({
                     "id": ann_id, "image_id": img_id,
-                    "category_id": CAT_ID[name], "iscrowd": 0,
+                    "category_id": CAT_ID[name], "iscrowd": int(crowd),
                     "area": frac * AREA,
                     "bbox": [10.0, 10.0, float(side), float(side)],
                     "_side": side,
@@ -110,7 +114,8 @@ class StubCoco:
         return m
 
 
-CFG = dict(min_regions=3, max_regions=5, min_area_frac=0.02, max_area_frac=0.25)
+CFG = dict(min_regions=3, max_regions=5, min_area_frac=0.02, max_area_frac=0.25,
+           duplicate_area_frac=0.01)
 
 
 def check(name: str, cond: bool, detail: str = "") -> bool:
@@ -145,23 +150,59 @@ def main() -> int:
             ("cup", 0.06)],                                              # tiny dropped -> 3
         4: [("car", 0.90), ("bottle", 0.05), ("chair", 0.08)],           # huge dropped -> 2
         5: [("car", 0.10), ("car", 0.09), ("bottle", 0.05),
-            ("chair", 0.08)],                                            # dup cat -> 3
+            ("chair", 0.08)],                                            # dup car -> 2
         6: [("giraffe", 0.10), ("zebra", 0.09), ("bottle", 0.05),
             ("chair", 0.08)],                                            # 2 instructable
         7: [("car", .05), ("bottle", .05), ("chair", .05), ("cup", .05),
             ("bowl", .05), ("book", .05)],                               # 6 -> too many
+        # The uniqueness rule's three interesting cases.
+        8: [("car", 0.10), ("car", 0.005), ("bottle", 0.05),
+            ("chair", 0.08)],                                # 2nd car invisible -> 3
+        9: [("car", 0.10), ("car", 0.09, 1), ("bottle", 0.05),
+            ("chair", 0.08)],                                # crowd of cars -> 2
+        10: [("person", 0.10, 1), ("car", 0.10), ("bottle", 0.05),
+             ("chair", 0.08)],                               # crowd is not a region -> 3
     }
     coco = StubCoco(imgs)
     got = {info["id"]: keep for info, keep in S.select(coco, CFG, random.Random(0))}
     ok &= check("selected exactly the qualifying images",
-                sorted(got) == [1, 3, 5], f"got {sorted(got)}")
+                sorted(got) == [1, 3, 8, 10], f"got {sorted(got)}")
     ok &= check("image 3 dropped the 0.1%-area region",
                 len(got.get(3, [])) == 3 and
                 all(f >= CFG["min_area_frac"] for _, _, f, _ in got[3]))
-    ok &= check("image 5 kept only one 'car'",
-                [lab for _, lab, _, _ in got.get(5, [])].count("car") == 1)
     ok &= check("image 7 rejected for having too many regions", 7 not in got)
     ok &= check("image 6 rejected: only 2 instructable categories", 6 not in got)
+
+    print("\n" + "=" * 68)
+    print("2b. UNIQUENESS: a region's category appears exactly once in the image")
+    print("=" * 68)
+    # Not "distinct among the regions we kept" - distinct in the whole frame.
+    # Otherwise "make the car red" is issued against a photo with three cars,
+    # only one of which is a region, and neither the editor nor the judge has
+    # any way to know which one was meant.
+    ok &= check("image 5 rejected: a second in-band car makes 'the car' ambiguous",
+                5 not in got)
+    ok &= check("image 8 kept: the second car is below duplicate_area_frac",
+                8 in got and [lab for _, lab, _, _ in got.get(8, [])] ==
+                ["car", "bottle", "chair"], f"{[l for _, l, _, _ in got.get(8, [])]}")
+    ok &= check("image 9 rejected: a CROWD of cars counts as a duplicate",
+                9 not in got)
+    ok &= check("image 10 kept, and the crowd annotation is not itself a region",
+                10 in got and "person" not in
+                [lab for _, lab, _, _ in got.get(10, [])])
+
+    # duplicate_categories directly, so a failure above localises.
+    cats = {CAT_ID[n]: n for n in COCO80}
+    dups = lambda i: S.duplicate_categories(coco.loadAnns(coco.getAnnIds(imgIds=i)),
+                                            AREA, cats, CFG)
+    ok &= check("duplicate_categories flags the doubled category", dups(5) == {"car"})
+    ok &= check("an invisible duplicate is not flagged", dups(8) == set(), f"{dups(8)}")
+    ok &= check("a crowd annotation is counted", dups(9) == {"car"})
+    ok &= check("a lone category is never flagged", dups(1) == set())
+    ok &= check("the floor is configurable",
+                S.duplicate_categories(coco.loadAnns(coco.getAnnIds(imgIds=8)), AREA,
+                                       cats, {**CFG, "duplicate_area_frac": 0.001})
+                == {"car"})
 
     print("\n" + "=" * 68)
     print("3. INSTRUCTIONS are drawn once and match their region, in order")
@@ -214,7 +255,8 @@ def main() -> int:
         s = S.write_base(out, info, keep, coco, imgdir)
         if s:
             specs.append(s)
-    ok &= check("wrote a spec per selected image", len(specs) == 3)
+    ok &= check("wrote a spec per selected image", len(specs) == len(got),
+                f"{len(specs)} vs {len(got)}")
 
     spec = specs[0]
     d = out / spec["base_id"]

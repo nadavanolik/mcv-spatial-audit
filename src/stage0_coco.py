@@ -13,6 +13,12 @@ hardcoded here, so tuning the config silently did nothing).
   - each instance 2-25% of image area (big enough to corrupt visibly, small
     enough that "region" means something)
   - distinct categories, so instructions are unambiguous about their target
+  - UNIQUE categories: no *second* instance of a region's category anywhere in
+    the image, not merely none among the regions we kept. Without this,
+    "make the car red" gets issued against a photo containing three cars, only
+    one of which is a region -- the editor may recolour any of them and the
+    judge is asked whether the instruction succeeded inside one box. See
+    `duplicate_categories`.
   - low mask overlap, so a penalty landing on region A vs B is interpretable
 
 NOTE ON TESTABILITY: `select` deliberately does not import or type-check
@@ -31,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+from collections import Counter
 from pathlib import Path
 from typing import Optional, Protocol
 
@@ -49,6 +56,11 @@ class CocoLike(Protocol):
     """
     def getImgIds(self) -> list: ...
     def loadImgs(self, ids) -> list: ...
+    # Called WITHOUT iscrowd: we need the crowd annotations too, because a
+    # "crowd of cars" blob makes "make the car red" just as ambiguous as a
+    # second individual car does. Crowds are filtered out of the region
+    # candidates in Python instead, which also drops our dependence on
+    # pycocotools' own `iscrowd=` comparison semantics.
     def getAnnIds(self, imgIds=..., iscrowd=...) -> list: ...
     def loadAnns(self, ids) -> list: ...
     def getCatIds(self) -> list: ...
@@ -114,12 +126,67 @@ def load_selection_cfg(path: str = "config.yaml") -> dict:
     """Read the `selection:` block. Falls back to the historical defaults if
     the file or the block is absent, so the module still imports standalone."""
     defaults = dict(min_regions=3, max_regions=5,
-                    min_area_frac=0.02, max_area_frac=0.25)
+                    min_area_frac=0.02, max_area_frac=0.25,
+                    duplicate_area_frac=0.01)
     try:
         cfg = yaml.safe_load(Path(path).read_text()) or {}
     except FileNotFoundError:
         return defaults
     return {**defaults, **(cfg.get("selection") or {})}
+
+
+def duplicate_categories(anns: list, area_img: int, cats: dict,
+                         cfg: dict) -> set:
+    """Categories appearing more than once in this image - not usable as regions.
+
+    `anns` must be EVERY annotation of the image, crowds included, not just the
+    region candidates: the whole point is the instances selection would
+    otherwise never look at. A crowd annotation counts as one duplicate rather
+    than the N instances it contains, which is enough - it only ever needs to
+    push a count from 1 to 2.
+
+    Only annotations at or above `duplicate_area_frac` count. A second car 40
+    pixels wide in the far background will not confuse the editor or the judge,
+    and discarding the image for it is pure yield lost. Default 0.01, half of
+    min_area_frac: big enough to see, too small to be a region.
+    """
+    floor = float(cfg.get("duplicate_area_frac", 0.01))
+    counts = Counter(cats[a["category_id"]] for a in anns
+                     if a["area"] / area_img >= floor)
+    return {label for label, n in counts.items() if n > 1}
+
+
+def candidates(all_anns: list, area_img: int, cats: dict, cfg: dict) -> list:
+    """[(ann, label, area_frac), ...] for the regions selection would keep.
+
+    Everything except the instruction, which `select` draws separately because
+    drawing consumes RNG state and `survey` must not perturb it.
+
+    `select` and `survey` BOTH go through here. They used to carry two copies
+    of this filter - `select` testing `instruction_for(...) is None`, `survey`
+    testing `label not in INSTRUCTABLE` - equivalent by accident rather than by
+    construction. A survey reporting a yield the selector cannot deliver is
+    worse than no survey.
+    """
+    dup = duplicate_categories(all_anns, area_img, cats, cfg)
+
+    out, seen = [], set()
+    for a in all_anns:
+        if a.get("iscrowd"):                      # crowds are never a region
+            continue
+        label = cats[a["category_id"]]
+        if label in dup:                          # another instance elsewhere
+            continue
+        frac = a["area"] / area_img
+        if not (cfg["min_area_frac"] <= frac <= cfg["max_area_frac"]):
+            continue
+        if label in seen:                         # distinct categories only
+            continue
+        if label not in INSTRUCTABLE:
+            continue
+        seen.add(label)
+        out.append((a, label, frac))
+    return out
 
 
 def select(coco: CocoLike, cfg: dict, rng: random.Random):
@@ -132,34 +199,31 @@ def select(coco: CocoLike, cfg: dict, rng: random.Random):
     for img_id in coco.getImgIds():
         info = coco.loadImgs(img_id)[0]
         area_img = info["width"] * info["height"]
-        anns = coco.loadAnns(coco.getAnnIds(imgIds=img_id, iscrowd=False))
+        all_anns = coco.loadAnns(coco.getAnnIds(imgIds=img_id))
+        cand = candidates(all_anns, area_img, cats, cfg)
 
-        keep, seen, colors = [], set(), set()
-        for a in anns:
-            label = cats[a["category_id"]]
-            frac = a["area"] / area_img
-            if not (cfg["min_area_frac"] <= frac <= cfg["max_area_frac"]):
-                continue
-            if label in seen:                     # distinct categories only
-                continue
-            instr = instruction_for(label, rng, colors)
-            if instr is None:
-                continue
-            seen.add(label)
-            keep.append((a, label, frac, instr))
+        # Reject on count BEFORE drawing instructions, so an unusable image
+        # does not advance the RNG stream.
+        if not (cfg["min_regions"] <= len(cand) <= cfg["max_regions"]):
+            continue
 
-        if cfg["min_regions"] <= len(keep) <= cfg["max_regions"]:
-            yield info, keep
+        keep, colors = [], set()
+        for a, label, frac in cand:
+            keep.append((a, label, frac, instruction_for(label, rng, colors)))
+        yield info, keep
 
 
-def survey(coco: CocoLike, cfg: dict, rng: random.Random) -> dict:
+def survey(coco: CocoLike, cfg: dict, rng: Optional[random.Random] = None) -> dict:
     """How many bases would selection actually yield, and why are the rest
     rejected?
 
     Worth its own entry point: the filter wants 3-5 *distinct instructable*
-    categories at 2-25% area in one image, and there is no guarantee COCO
-    val2017 contains 200 such images. Discovering that after downloading 20GB
-    and burning editor-VM hours would be an expensive way to learn it.
+    categories at 2-25% area in one image, with no other instance of any of
+    them anywhere in the frame, and there is no guarantee COCO val2017 contains
+    200 such images. Discovering that after downloading 20GB and burning
+    editor-VM hours would be an expensive way to learn it.
+
+    `rng` is accepted and unused: surveying draws no instructions.
     """
     cats = {c["id"]: c["name"] for c in coco.loadCats(coco.getCatIds())}
     hist: dict[int, int] = {}
@@ -168,17 +232,9 @@ def survey(coco: CocoLike, cfg: dict, rng: random.Random) -> dict:
         n_img += 1
         info = coco.loadImgs(img_id)[0]
         area_img = info["width"] * info["height"]
-        keep, seen = 0, set()
-        for a in coco.loadAnns(coco.getAnnIds(imgIds=img_id, iscrowd=False)):
-            label = cats[a["category_id"]]
-            frac = a["area"] / area_img
-            if not (cfg["min_area_frac"] <= frac <= cfg["max_area_frac"]):
-                continue
-            if label in seen or label not in INSTRUCTABLE:
-                continue
-            seen.add(label)
-            keep += 1
-        hist[keep] = hist.get(keep, 0) + 1
+        all_anns = coco.loadAnns(coco.getAnnIds(imgIds=img_id))
+        k = len(candidates(all_anns, area_img, cats, cfg))
+        hist[k] = hist.get(k, 0) + 1
     usable = sum(v for k, v in hist.items()
                  if cfg["min_regions"] <= k <= cfg["max_regions"])
     return {"n_images": n_img, "hist": dict(sorted(hist.items())), "usable": usable}
