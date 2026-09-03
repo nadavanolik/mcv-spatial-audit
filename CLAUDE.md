@@ -225,12 +225,13 @@ from source" warning is retired.)
   total matched), and then on VM `mcvgpu2025s-0050` (2026-08-25), which printed
   `776feeddd281fa726195bf504c7b19c8` — the pre-bump container reference —
   while running 4.11.0.86. The bump forced by vLLM re-baselines nothing.
-- **Cross-VM agreement is confirmed, not assumed** (2026-08-25). Two
-  independent VMs — `mcvgpu2025s-0050` and `mcvgpu2025s-0043` — both print
-  `776feeddd281fa726195bf504c7b19c8` on `numpy 1.26.4 / cv2 4.11.0 /
-  pillow 10.4.0`, matching the reference container. This is the invariant the
-  whole five-way shard split rests on and it had never been tested before now.
-  The remaining three VMs must reproduce it as they come online.
+- **Cross-VM agreement is confirmed, not assumed.** Three independent VMs —
+  `mcvgpu2025s-0050` and `mcvgpu2025s-0043` (2026-08-25), `mcvgpu2025s-0053`
+  (2026-09-03) — all print `776feeddd281fa726195bf504c7b19c8` on
+  `numpy 1.26.4 / cv2 4.11.0 / pillow 10.4.0`, matching the reference
+  container. This is the invariant the whole five-way shard split rests on and
+  it had never been tested before 2026-08-25. The remaining two VMs must
+  reproduce it as they come online.
 - **The laptop's hash differs for platform reasons only, as suspected.** Linux
   gives `776feedd…`; Windows gives `5073799d…` on identical pins. Both are
   internally stable. Compare VM hashes to `776feedd…`; never to the laptop's.
@@ -278,6 +279,10 @@ from source" warning is retired.)
   `full_cross`'s 200, which is out of scope anyway. Mean 3.21 regions/base.
   If more are ever needed, train2017 at the same rate gives ~4,400 — but it is
   19GB and will not fit next to FLUX on the 90G disk.
+  **STALE as of 2026-09-03:** this predates the category-uniqueness rule below,
+  which can only reduce it. `person` and `car` are COCO's two commonest
+  categories and rarely appear alone, so the drop may be large. Re-run
+  `--survey` before choosing `--n`; 187 is now only the ceiling.
 
 **The full pipeline runs on real data (2026-08-26, `mcvgpu2025s-0050`).**
 stage 0 -> 1 -> manifest -> 2 -> 3 -> 4 end to end, 100 base specs, 5 edited,
@@ -343,15 +348,45 @@ section is history plus the residual risk in each):**
   a stub COCO. That was made possible by deleting an `assert isinstance(coco,
   COCO)` whose only effect was to force a `pycocotools` import — a library that
   only stage 0 needs — into the one function
-  carrying the real risk. Still unverified: pycocotools' own API
-  (`annToMask`, `getAnnIds(iscrowd=...)`) and, more importantly, **whether
-  val2017 even contains 200 qualifying images**. Run `--survey` first; it needs
-  only the annotations JSON, no images and no writes.
+  carrying the real risk. Still unverified: `annToMask`, and more importantly
+  **whether val2017 contains enough qualifying images**. Run `--survey` first;
+  it needs only the annotations JSON, no images and no writes.
   Three bugs fixed while testing: `config.yaml`'s `selection:` block was
   ignored in favour of hardcoded values; `instruction_for` was drawn twice per
   region (once to test for `None`, once for real) so the instruction written
   was a different draw from the one that passed the filter; and `"trash can"`
   is not a COCO category, so it matched nothing, silently, forever.
+
+  **Category uniqueness, added 2026-09-03.** A region's category must appear
+  exactly ONCE in the image — not merely once among the regions we kept. The
+  old rule (`label in seen`) ran *after* the area band, so a 30%-area car was
+  dropped for size and a 10%-area car was then happily kept: region list clean,
+  photograph containing two cars. `"make the car red"` is then ambiguous to
+  FLUX *and* to the judge, which puts noise straight into the `success` axis
+  for a reason we created ourselves. `duplicate_categories()` now counts every
+  annotation in the frame, **crowd annotations included** (a "crowd of cars"
+  blob is exactly as ambiguous as a second individual car), and disqualifies
+  any category appearing twice at or above `selection.duplicate_area_frac`
+  (0.01, half of `min_area_frac`: visible, but too small to be a region). A
+  40-pixel background car confuses nobody and discarding the image for it is
+  pure yield lost — that floor is the whole reason the rule is not strict.
+
+  Two structural consequences worth not undoing:
+  - `select` and `survey` now share one filter, `candidates()`. They used to
+    carry two copies (`instruction_for(...) is None` vs `label not in
+    INSTRUCTABLE`) that were equivalent by accident. A survey that reports a
+    yield the selector cannot deliver is worse than no survey.
+  - `getAnnIds` is called with **no** `iscrowd` argument and crowds are dropped
+    in Python. We need the crowd annotations for the duplicate count, and this
+    also removes our dependence on pycocotools' `iscrowd=` comparison, which
+    was on the unverified list above.
+
+  `select` also now rejects on the region-count window *before* drawing
+  instructions, so an unusable image no longer advances the RNG stream.
+  **Any change to this filter restales every `edit.png`** — `stage1_edit`
+  fingerprints edits against a hash of their instruction, and shifting which
+  regions survive shifts every instruction. Cheap now (5 edits); 5.3h after the
+  100-base run.
 - `stage1_edit.py` — **`--preflight` now settles most of it without a
   download.** It checks the `FluxKontextPipeline` class name, its `__call__`
   signature, the offload API, HF auth, gated-repo access, disk, and the stage-0
@@ -629,15 +664,30 @@ the harness.
   a problem for RL training regardless of whether it localises.
 
 **Do next, in order:**
-1. Editor VM: edit the remaining 95 bases (~5h at 189s each), then
-   `tar czf bases.tar.gz -C data bases` and upload. Everything downstream is
-   blocked on that tarball.
-2. ~~Run the pilot~~ **DONE — verdict GO, see PILOT VERDICT above.** The axis
+1. **Re-run `--survey` under the category-uniqueness rule** and pick `--n` from
+   what survives. This gates everything: it decides the base count, and it must
+   land before stage 1 runs at scale because changing the filter restales every
+   `edit.png`. 187 was the pre-rule ceiling.
+2. Editor VM: re-run stage 0, then edit the chosen number of bases (~189s
+   each), then `tar czf bases.tar.gz -C data bases` and upload. Everything
+   downstream is blocked on that tarball.
+3. ~~Run the pilot~~ **DONE — verdict GO, see PILOT VERDICT above.** The axis
    table turned out to be the wrong readout: the informative one is the tie
    rate (`sensitivity`), because 53-80% of damaged regions do not move at all
    and an axis mean cannot show that.
-3. Cross-VM determinism hash from the three VMs that have not reported it.
-4. `main`: **~1.1h/VM** at greedy, sharded five ways (3.1h at n=5).
+4. Cross-VM determinism hash from the two VMs that have not reported it.
+5. `main`: **~1.1h/VM** at greedy, sharded five ways (3.1h at n=5).
+
+**Base count is open (raised 2026-09-03).** 100 vs 150 costs 2.7 extra hours on
+the editor VM (5.3h -> 8.0h, serial, blocking) and nothing anywhere else —
+stage 3 goes 1.1 -> 1.7h/VM, disk is a rounding error. What it buys is modest
+and worth stating honestly: regions within an image are NOT independent (that
+is the finding — coherence 27%, redundancy R^2 0.52-0.56), so effective n is
+the photograph count, and 100 -> 150 narrows intervals by 1/sqrt(1.5), ~18%.
+It crosses no threshold: the tie rate is already comfortable at 100, and AUROC
+is not resolvable at either. Decide it after the survey, not before —
+uniqueness may put 150 out of reach anyway. `stage1_edit` resumes from
+`edit_state`, so topping up later costs nothing.
 
 **Do not re-litigate** (each was measured, not argued):
 - `--gpu-util` 0.89; the window is (0.861, 0.901) and both ends fail.
@@ -656,9 +706,10 @@ empty second cache and ran the disk out mid-transfer. Fixed: the script now
 inherits `HF_HOME`, reports which cache it will use, and refuses to start if the
 model is uncached with under 25G free. **Do not set `HF_HOME`.**
 
-**Still unverified:** determinism on VMs 3-5. That is the only outstanding
-verification. (`run_shard.sh` ran end to end for the pilot; stage 4 has seen
-real 5-base data.)
+**Still unverified:** determinism on the last two VMs. `mcvgpu2025s-0053`
+reported `776feeddd281fa726195bf504c7b19c8` on 2026-09-03, making three of five.
+That is the only outstanding verification. (`run_shard.sh` ran end to end for
+the pilot; stage 4 has seen real 5-base data.)
 
 ## Open TODOs
 

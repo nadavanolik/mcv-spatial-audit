@@ -93,6 +93,28 @@ pip install --force-reinstall torch --index-url https://download.pytorch.org/whl
 hf auth login     # FLUX.1-Kontext-dev is gated; accept the licence on its model page
 ```
 
+## Data
+
+Only the machine running stage 0 needs COCO. Everyone else works from
+`bases.tar.gz`.
+
+```bash
+mkdir -p data/coco && cd data/coco
+
+# Annotations, 241MB. Naming the one member skips instances_train2017.json,
+# which is ~450MB you will never open.
+wget http://images.cocodataset.org/annotations/annotations_trainval2017.zip
+unzip -o annotations_trainval2017.zip annotations/instances_val2017.json
+rm annotations_trainval2017.zip
+
+# Images, 1GB. NOT needed for --survey; skip until the survey looks right.
+wget http://images.cocodataset.org/zips/val2017.zip
+unzip -q val2017.zip && rm val2017.zip
+```
+
+train2017 is deliberately not used: 19GB, and it will not fit next to FLUX on
+the 90G root.
+
 ## Pipeline
 
 ```

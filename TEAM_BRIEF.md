@@ -83,7 +83,7 @@ images and gives ~21× the data. Nobody should quote these numbers as final.
 
 ### Everyone: send Nadav your determinism hash
 
-**~10 minutes. No GPU needed. Three of five VMs still owe this.**
+**~10 minutes. No GPU needed. Two of five VMs still owe this.**
 
 Why it matters: if your machine's damaged images differ from mine by even one
 pixel, your results can't be combined with mine — and nothing downstream would
@@ -118,9 +118,9 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 
 | Role | Where it stands | Next |
 |---|---|---|
-| **Editor VM** | stages 0+1 working, 5 of 100 images edited | Edit the remaining 95 (~5h), then `tar czf bases.tar.gz -C data bases` and upload. **Everyone else is waiting on this.** |
+| **Editor VM** | stages 0+1 working, 5 images edited | Re-run the image survey first (decision 4), then edit the agreed number (~3 min each), `tar czf bases.tar.gz -C data bases` and upload. **Everyone else is waiting on this.** |
 | **Judge harness** | working, 100% parse, real published prompt | Decide the sampling config — decision 1 below |
-| **Corruption + manifest** | determinism confirmed on 2 of 5 VMs | Chase the other three. Own `config.yaml` |
+| **Corruption + manifest** | determinism confirmed on 3 of 5 VMs | Chase the other two. Own `config.yaml` |
 | **Analysis** | stage 4 runs on real data | Start the figures. The tie-rate and coherence tables are the headline ones, not AUROC |
 | **Second judge** | Qwen3-VL-4B downloaded and working | Pick a second *family*, not just a second size, and justify it |
 
@@ -142,6 +142,23 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 3. **"remove the X" instructions in stage 0.** They clash with `remove` also
    being one of our damage types, and "was this region preserved?" is
    meaningless for a region we told the editor to delete.
+
+4. **How many photographs.** We were going to use 100. The cost of 150 is
+   2.7 extra hours on the editor VM overnight and nothing anywhere else, so
+   it's cheap — but it only tightens our error bars by about a fifth, because
+   the regions inside one photo don't count as separate samples. That's our
+   own finding: the judge treats a photo as one thing.
+
+   It's also capped by a change we just made. A photo now only qualifies if
+   each object we edit appears exactly **once** in it — otherwise "make the car
+   red" is ambiguous when there are three cars, and neither the editor nor the
+   judge can know which one we meant. That was letting avoidable noise into the
+   results. It also throws photos away, and nobody knows how many yet.
+
+   **So: run the survey, see what's left, then pick the number.** The survey
+   takes ten minutes and needs no images. Do it before any editing starts —
+   changing this filter changes every instruction, which invalidates any images
+   already edited.
 
 ## Two things that must reach the report
 
