@@ -43,6 +43,10 @@ scripts/verify_determinism.sh  cross-VM hash check
 
 tests/                    5 suites, all CPU, all run in seconds
 config.yaml               pilot / main / full_cross profiles
+
+docs/DECISIONS.md         why the harness is what it is: measurements behind
+                          every constraint, settled questions, bug history
+docs/FINDINGS.md          what we measured about the judge, and its caveats
 ```
 
 ## Requirements
