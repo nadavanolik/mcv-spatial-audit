@@ -31,6 +31,7 @@ CPU_MODULES = [
     "src.schema",
     "src.corruptions",
     "src.judge_prompt",
+    "src.presentation",
     "src.build_manifest",
     "src.stage0_coco",
     "src.stage2_corrupt",

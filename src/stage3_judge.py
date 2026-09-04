@@ -30,6 +30,8 @@ from . import judge_prompt
 from .judge_prompt import (build_sc_prompt, build_pq_prompt, parse_sc, parse_pq,
                            region_reward, sc_json_schema, pq_json_schema,
                            REASONING_MODES)
+from .presentation import (PRESENTATIONS, TEXT_AXES, present, enhance,
+                           draw_boxes)
 from .schema import shard
 
 # 768^2 = 589,824. Chosen to be a no-op on our actual data while shrinking the
@@ -230,7 +232,8 @@ def _build_engine(model: str, max_len: int, util: float):
         raise
 
 
-def build_requests(rows: pd.DataFrame, bases: Path, variants: Path) -> tuple[list, list]:
+def build_requests(rows: pd.DataFrame, bases: Path, variants: Path,
+                   presentation: str = "baseline") -> tuple[list, list]:
     """Two requests per variant, following A.4.3 / A.4.4:
 
       SC  source + edited, scoring EVERY region at once (plus background and
@@ -243,6 +246,16 @@ def build_requests(rows: pd.DataFrame, bases: Path, variants: Path) -> tuple[lis
     cross-region leakage shows up the way the paper's judge would exhibit it
     rather than as an artefact of how we sliced requests. It also happens to be
     cheaper: 2 requests per variant instead of one per region.
+
+    `presentation` re-packages those same two requests for the nuisance and
+    exploitability analyses (see src/presentation.py). The images on disk are
+    never touched: any pixel change happens in memory, here, so no manifest
+    column and no re-render is involved. "baseline" is the identity.
+
+    PQ is re-sent under every presentation, including the text-only axes where
+    the edited image is unchanged. That costs 50% more requests than skipping
+    it, and buys a populated `reward` column under every condition so the
+    tables read directly against the main run's.
     """
     msgs, meta = [], []
     for row in rows.itertuples():
@@ -250,21 +263,28 @@ def build_requests(rows: pd.DataFrame, bases: Path, variants: Path) -> tuple[lis
         src = Image.open(bases / row.base_id / "source.png").convert("RGB")
         edit = Image.open(variants / f"{row.variant_id}.png").convert("RGB")
 
+        shown = present(regions, row.target_region_id, row.variant_id, presentation)
+        if presentation == "enhance":
+            edit = enhance(edit)          # the edit only: the source is the real photo
+        elif presentation == "box":
+            src, edit = draw_boxes(src, shown), draw_boxes(edit, shown)
+        pics = [] if presentation == "noimg" else [src, edit]
+
         common = dict(variant_id=row.variant_id, base_id=row.base_id,
                       target_region_id=str(row.target_region_id),
                       corruption=row.corruption, severity=row.severity,
                       area_bin=row.area_bin, is_control=row.is_control,
-                      region_ids=[r["region_id"] for r in regions])
+                      presentation=presentation, n_shown=len(shown),
+                      region_ids=[r["region_id"] for r in shown])
 
         msgs.append([{"role": "user", "content": [
-            {"type": "image_pil", "image_pil": src},
-            {"type": "image_pil", "image_pil": edit},
-            {"type": "text", "text": build_sc_prompt(row.instruction, regions)},
+            *({"type": "image_pil", "image_pil": im} for im in pics),
+            {"type": "text", "text": build_sc_prompt(row.instruction, shown)},
         ]}])
         meta.append({**common, "kind": "sc"})
 
         msgs.append([{"role": "user", "content": [
-            {"type": "image_pil", "image_pil": edit},
+            *({"type": "image_pil", "image_pil": im} for im in pics[-1:]),
             {"type": "text", "text": build_pq_prompt()},
         ]}])
         meta.append({**common, "kind": "pq"})
@@ -400,7 +420,11 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
         for i, cand in enumerate(o.outputs):
             sc = parse_sc(cand.text)
             pq = pq_by_key.get((m["variant_id"], i))
-            for rid in list(m["region_ids"]) + ["bg"]:
+            # slot_idx is the region's POSITION in the list the judge was
+            # shown, which is what the `shuffle` axis varies. "the score tracks
+            # list position rather than region content" is a far stronger
+            # statement than "the score moved", and it costs one integer.
+            for slot, rid in enumerate(list(m["region_ids"]) + ["bg"]):
                 pair = None if rid == "bg" else sc.get("regions", {}).get(rid)
                 recs.append({
                     # str(rid), NOT rid. The column carries region ints and the
@@ -411,6 +435,7 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
                     # throw away an hour of A10 time. target_region_id is
                     # stringified alongside it so the two stay comparable.
                     **base, "sample_idx": i, "scored_region_id": str(rid),
+                    "slot_idx": -1 if rid == "bg" else slot,
                     "sc_success": pair[0] if pair else None,
                     "sc_preserve": pair[1] if pair else None,
                     "sc_background": sc.get("background"),
@@ -491,10 +516,36 @@ def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
               "(variants) first, or point --bases/--variants elsewhere.")
         return 1
 
-    msgs, meta = build_requests(rows, bases, variants)
+    msgs, meta = build_requests(rows, bases, variants, a.presentation)
     per_variant = len(msgs) / max(len(rows), 1)
     print(f"{len(msgs)} requests ({per_variant:.2f} per variant: 1 SC + 1 PQ) "
           f"x n={a.n_samples} = {len(msgs) * a.n_samples} generations")
+
+    # A presentation axis is easy to get silently wrong -- a permutation that
+    # never permutes, a subset that drops the target -- and nothing in the
+    # score column afterwards would reveal it. Show what actually changed.
+    if a.presentation != "baseline":
+        canon = [r["region_id"] for r in
+                 json.loads((bases / rows.iloc[0].base_id / "regions.json").read_text())]
+        print(f"\n--- presentation: {a.presentation} ---")
+        print(f"  canonical region order (first base): {canon}")
+        seen = [(m["variant_id"], m["target_region_id"], m["region_ids"])
+                for m in meta if m["kind"] == "sc"]
+        for vid, tgt, ids in seen[:5]:
+            print(f"  {vid} target={tgt} -> shown {ids}")
+        if a.presentation in TEXT_AXES:
+            n_ch = sum(1 for _, _, ids in seen if ids != canon)
+            print(f"  {n_ch}/{len(seen)} variants differ from the canonical list")
+            if n_ch == 0:
+                print("  WARNING: this axis changed NOTHING. A nuisance "
+                      "condition identical to")
+                print("  baseline measures nothing. Fix it before spending "
+                      "GPU time.")
+        else:
+            print("  (this axis changes pixels, not the region list)")
+        if a.presentation == "noimg":
+            n_img = sum(1 for c in msgs[0][0]["content"] if c["type"] == "image_pil")
+            print(f"  image parts in the first request: {n_img} (must be 0)")
 
     print("\n--- first request ---")
     print(f"meta: {meta[0]}")
@@ -557,6 +608,16 @@ def main():
                          "makes xgrammar count characters and costs 58.9s per "
                          "request against 7.9s. none drops the field, which "
                          "A.4.3 asks for -- state it in the report if used.")
+    ap.add_argument("--presentation", default="baseline", choices=PRESENTATIONS,
+                    help="how the judge is TOLD about the regions, for the "
+                         "nuisance and exploitability analyses. baseline is "
+                         "the identity and is what every other run uses. The "
+                         "images on disk are never modified -- see "
+                         "src/presentation.py. Write each condition to its own "
+                         "parquet under out/nuisance/, NOT alongside "
+                         "out/scores_shard*.parquet: stage 4 does not group by "
+                         "presentation and would pool the conditions together "
+                         "silently.")
     ap.add_argument("--no-structured", action="store_true",
                     help="disable JSON-schema-constrained decoding. Only for "
                          "measuring what the constraint is worth -- "
@@ -598,8 +659,8 @@ def main():
             lines.append("Run stage 0 and stage 1 first, or point --bases elsewhere.")
         raise SystemExit("\n".join(lines))
 
-    msgs, meta = build_requests(df, Path(a.bases), Path(a.variants))
-    print(f"{len(msgs)} requests x n={a.n_samples}")
+    msgs, meta = build_requests(df, Path(a.bases), Path(a.variants), a.presentation)
+    print(f"{len(msgs)} requests x n={a.n_samples} (presentation={a.presentation})")
 
     llm = load_engine(a.model, max_len=a.max_model_len, util=a.gpu_util)
     res = run(llm, msgs, meta, a.n_samples, a.temperature,
