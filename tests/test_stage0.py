@@ -123,13 +123,36 @@ def check(name: str, cond: bool, detail: str = "") -> bool:
     return bool(cond)
 
 
+ATTR_WORDS = {"sunglasses", "older", "beard", "moustache"}
+
+
+def families(instr: str) -> list:
+    """Which instruction families a string belongs to. Must always be exactly
+    one: a region gets ONE edit, never "make the chair red out of marble"."""
+    w = set(instr.split())
+    fams = []
+    if instr.startswith("remove the ") or instr.startswith("erase the "):
+        fams.append("remove")
+    if w & set(S.MATERIALS):
+        fams.append("material")
+    if w & set(S.COLORS):
+        fams.append("color")
+    if w & ATTR_WORDS:
+        fams.append("attr")
+    return fams
+
+
+def n_removals(keep) -> int:
+    return sum(1 for _, _, _, i in keep if families(i) == ["remove"])
+
+
 def main() -> int:
     ok = True
 
     print("=" * 68)
     print("1. CATEGORY NAMES all exist in COCO's 80")
     print("=" * 68)
-    for setname in ("RECOLORABLE", "PERSONLIKE", "REMOVABLE"):
+    for setname in ("RECOLORABLE", "PERSONLIKE", "REMOVABLE", "MATERIALIZABLE"):
         s = getattr(S, setname)
         bad = sorted(x for x in s if x not in CAT_ID)
         ok &= check(f"{setname} ({len(s)} entries) all real COCO names",
@@ -139,6 +162,39 @@ def main() -> int:
                     for c in S.INSTRUCTABLE))
     ok &= check("a non-instructable category yields None",
                 S.instruction_for("giraffe", random.Random(0)) is None)
+
+    print("\n" + "=" * 68)
+    print("1b. POOL INVARIANTS: the material family moves categories, "
+          "it does not add or remove any")
+    print("=" * 68)
+    # Yield must not change. MATERIALIZABLE is a subset of what was already
+    # instructable, so INSTRUCTABLE - and every survey number ever measured
+    # against it - is unaffected by adding the family.
+    extra = sorted(S.MATERIALIZABLE - (S.RECOLORABLE | S.REMOVABLE))
+    ok &= check("MATERIALIZABLE subset of RECOLORABLE | REMOVABLE",
+                not extra, f"adds: {extra}" if extra else "")
+    ok &= check("INSTRUCTABLE unchanged by the material family",
+                S.INSTRUCTABLE == S.RECOLORABLE | S.PERSONLIKE | S.REMOVABLE)
+    # This is what makes the removal cap safe: over the cap a removable
+    # category falls through to material, so it never returns None and never
+    # has to be dropped from an already-counted region list.
+    orphan = sorted(S.REMOVABLE - S.MATERIALIZABLE)
+    ok &= check("every REMOVABLE category is also MATERIALIZABLE",
+                not orphan, f"no fallback: {orphan}" if orphan else "")
+    ok &= check("a removable category over the cap still yields an instruction",
+                all(S.instruction_for(c, random.Random(0), allow_remove=False)
+                    is not None for c in S.REMOVABLE))
+    ok &= check("and that instruction is never a removal",
+                all(families(S.instruction_for(c, random.Random(s),
+                                               allow_remove=False)) != ["remove"]
+                    for c in S.REMOVABLE for s in range(5)))
+    ok &= check("beard and moustache are in the person-attribute family",
+                any("beard" in t for t in S.ATTR_TEMPLATES)
+                and any("moustache" in t for t in S.ATTR_TEMPLATES))
+    # Every attribute template must be reachable, or adding one is a no-op.
+    drawn = {S.instruction_for("person", random.Random(s)) for s in range(200)}
+    ok &= check(f"all {len(S.ATTR_TEMPLATES)} attribute templates get drawn",
+                len(drawn) == len(S.ATTR_TEMPLATES), f"{sorted(drawn)}")
 
     print("\n" + "=" * 68)
     print("2. SELECTION honours the area band, distinctness and count window")
@@ -216,18 +272,77 @@ def main() -> int:
     # motorcycle to yellow" on a real COCO image, which makes the two regions
     # visually interchangeable - the worst possible stimulus for an audit whose
     # whole question is whether the judge can tell regions apart.
-    COLOR_WORDS = set(S.COLORS)
+    COLOR_WORDS, MATERIAL_WORDS = set(S.COLORS), set(S.MATERIALS)
+
+    def used_words(keep, vocab):
+        return [w for _, _, _, instr in keep
+                for w in instr.split() if w in vocab]
+
     for img_id, keep in got.items():
-        used = [w for _, _, _, instr in keep
-                for w in instr.split() if w in COLOR_WORDS]
-        ok &= check(f"img {img_id}: colours are distinct ({used})",
-                    len(used) == len(set(used)))
+        for _, label, _, instr in keep:
+            # One region, one edit. A region asked to be both red AND marble
+            # would make "did the edit succeed" two questions with one score.
+            ok &= check(f"img {img_id}: '{instr}' is exactly one family",
+                        len(families(instr)) == 1, f"{families(instr)}")
+        for name, vocab in (("colours", COLOR_WORDS), ("materials", MATERIAL_WORDS)):
+            used = used_words(keep, vocab)
+            ok &= check(f"img {img_id}: {name} are distinct ({used})",
+                        len(used) == len(set(used)))
+
+    # 5 regions that can take either family. Whichever way each region is
+    # drawn, no value may repeat inside the image, and every region gets one
+    # instruction.
     many = {99: [("car", .05), ("bus", .05), ("truck", .05), ("boat", .05),
                  ("chair", .05)]}
-    k = next(iter(S.select(StubCoco(many), CFG, random.Random(3))))[1]
-    used5 = [w for _, _, _, i in k for w in i.split() if w in COLOR_WORDS]
-    ok &= check(f"5 recolourable regions get 5 distinct colours ({used5})",
-                len(used5) == 5 and len(set(used5)) == 5)
+    seen_families = set()
+    for seed in range(20):
+        k = next(iter(S.select(StubCoco(many), CFG, random.Random(seed))))[1]
+        c5, m5 = used_words(k, COLOR_WORDS), used_words(k, MATERIAL_WORDS)
+        seen_families |= {f for _, _, _, i in k for f in families(i)}
+        ok &= check(f"seed {seed}: 5 regions, 5 values, none repeated "
+                    f"({c5} + {m5})",
+                    len(c5) + len(m5) == 5
+                    and len(set(c5)) == len(c5) and len(set(m5)) == len(m5))
+    # Drawn per REGION, not per category: over 20 seeds both families must
+    # appear, and at least one image must mix them.
+    ok &= check("both colour and material get drawn for the same categories",
+                seen_families == {"color", "material"}, f"{seen_families}")
+    mixed = any(len(set(f for _, _, _, i in
+                        next(iter(S.select(StubCoco(many), CFG,
+                                           random.Random(seed))))[1]
+                        for f in families(i))) == 2
+                for seed in range(20))
+    ok &= check("one photograph gets a mix of colour and material", mixed)
+
+    print("\n" + "=" * 68)
+    print("3b. REMOVAL CAP: at most one removal instruction per base")
+    print("=" * 68)
+    # An all-removal base ("remove the bottle, erase the cup, erase the book")
+    # produces an edited image that is mostly inpainted background: its
+    # `background` score largely scores our own inpainting, and corrupting an
+    # already-emptied region is a weak stimulus.
+    rm = {21: [("bottle", .05), ("cup", .05), ("bowl", .05)],
+          22: [("book", .05), ("clock", .05), ("potted plant", .05),
+               ("car", .05)]}
+    ok &= check("MAX_REMOVALS_PER_BASE is 1", S.MAX_REMOVALS_PER_BASE == 1)
+    for seed in range(10):
+        for info, keep in S.select(StubCoco(rm), CFG, random.Random(seed)):
+            n = n_removals(keep)
+            ok &= check(f"seed {seed} img {info['id']}: {n} removal(s)",
+                        n <= S.MAX_REMOVALS_PER_BASE,
+                        f"{[i for _, _, _, i in keep]}")
+            ok &= check(f"seed {seed} img {info['id']}: every region still "
+                        f"instructed",
+                        all(i is not None for _, _, _, i in keep))
+    # The cap must not silence removals altogether - it is a cap, not a ban.
+    got_rm = [n_removals(k) for _, k in S.select(StubCoco(rm), CFG,
+                                                 random.Random(0))]
+    ok &= check("a base with removable categories still gets one removal",
+                got_rm == [1, 1], f"{got_rm}")
+    # And in the main fixture: image 3 has two removables (bottle, cup).
+    ok &= check("image 3's second removable fell back to another family",
+                n_removals(got[3]) == 1,
+                f"{[i for _, _, _, i in got[3]]}")
 
     # The old code drew the instruction twice - once to test for None in
     # select(), once for real in write_base() - so the string written could

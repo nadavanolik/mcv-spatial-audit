@@ -136,10 +136,31 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
    the instability. **Decide before anyone starts the main run.**
 
 2. **"remove the X" instructions in stage 0.** They clash with `remove` also
-   being one of our damage types, and "was this region preserved?" is
-   meaningless for a region we told the editor to delete.
+   being one of our damage types. We also thought "was this region preserved?"
+   was meaningless for a region we told the editor to delete — but re-reading
+   the paper's rubric, that axis is at least as plausibly about *overediting*,
+   in which case a clean deletion should score high, not zero. The prompt can
+   honestly be read both ways, so we stopped arguing and will measure it: does
+   the judge give removal targets high or low preserve scores? Until then we
+   cap removals at one per photo (see below) rather than dropping them.
 
 ## Settled since the last brief
+
+**Our edits were mostly one instruction wearing different hats.** Counting the
+old photos, 57% of the regions were "change this object's colour". That is a
+problem for our question: if nearly every edit is a hue change, "the judge
+tracks colour" and "the judge tracks the region" look the same in the results.
+So objects can now also be asked to change *material* — wood, metal, glass,
+marble, leather — and colour-or-material is decided per object, so one photo
+gets a mix. People can also be given a beard or a moustache, not just
+sunglasses and ageing. No photo gained or lost eligibility from this: the same
+objects qualify, they just get asked for different things.
+
+**At most one deletion per photo.** Some photos were nothing but deletions
+("remove the bottle, erase the cup, erase the book"). The edited version of
+those is mostly filled-in background, so we would largely be scoring our own
+inpainting, and damaging an already-emptied region is a weak test. Extra
+deletable objects now get a material change instead.
 
 **Each object we edit must now appear exactly once in the photo.** Otherwise
 "make the car red" is ambiguous when there are three cars, and neither the

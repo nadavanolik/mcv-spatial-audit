@@ -425,6 +425,34 @@ section is history plus the residual risk in each):**
   `person` hardest of all (people almost never appear alone). Every proportion
   above will shift. Treat it as the shape of the old design, not a prediction.
 
+  **Instruction design changed 2026-09-04, in three ways.** All three shift
+  which string a region gets; none shifts which regions survive selection.
+
+  - **A MATERIAL family.** `MATERIAL_TEMPLATES` x `MATERIALS = [wood, metal,
+    glass, marble, leather]`, answering the colour monoculture above directly.
+    `MATERIALIZABLE` is deliberately a **subset of `RECOLORABLE | REMOVABLE`**,
+    so `INSTRUCTABLE` — and therefore every survey number ever measured
+    against it, including the 46/1,090 yields — is **unchanged**. Categories
+    move between instruction pools; none joins or leaves selection. Colour vs
+    material is drawn **per region, not per category**, so one photograph gets
+    a mix. `used_materials` mirrors `used_colors`: no two regions of an image
+    get the same material, for the same reason.
+  - **At most one removal per base** (`MAX_REMOVALS_PER_BASE = 1`). Some
+    val2017 bases were nothing but removals ("remove the bottle, erase the cup,
+    erase the book"): that base's edited image is mostly inpainted background,
+    its `background` score largely scores our own inpainting, and corrupting an
+    already-emptied region is a weak stimulus. Over the cap a removable
+    category **falls back to the material family** rather than being dropped —
+    dropping would change the region count `candidates()` already reported to
+    `survey`, so `select` and `survey` would silently disagree again. This is
+    why `REMOVABLE` must stay a subset of `MATERIALIZABLE`; `tests/test_stage0.py`
+    asserts both containments, because either one breaking is silent.
+  - **`ATTR_TEMPLATES` gained beard and moustache**, so `person` is no longer
+    half "make the person look older" — the vaguest instruction in the set.
+
+  Note this is independent of the open `score_preserve` question below: the cap
+  reduces removal's blast radius without deciding whether removal stays.
+
   `select` also now rejects on the region-count window *before* drawing
   instructions, so an unusable image no longer advances the RNG stream.
   **Any change to this filter restales every `edit.png`** — `stage1_edit`

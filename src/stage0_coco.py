@@ -70,9 +70,27 @@ class CocoLike(Protocol):
 
 # Instruction templates keyed by what we can plausibly ask an editor to do.
 COLOR_TEMPLATES = ["make the {label} {color}", "change the {label} to {color}"]
-ATTR_TEMPLATES = ["add sunglasses to the {label}", "make the {label} look older"]
+MATERIAL_TEMPLATES = ["make the {label} look like it is made of {material}",
+                      "change the {label} to {material}"]
+ATTR_TEMPLATES = ["add sunglasses to the {label}", "make the {label} look older",
+                  "add a beard to the {label}", "add a moustache to the {label}"]
 REMOVE_TEMPLATES = ["remove the {label}", "erase the {label}"]
 COLORS = ["red", "blue", "green", "yellow", "purple"]
+MATERIALS = ["wood", "metal", "glass", "marble", "leather"]
+
+# Probability that a category which can take EITHER a colour or a material is
+# sent to the material family. Drawn per REGION, not per category, so one
+# photograph gets a mix rather than being all-colour or all-material.
+MATERIAL_SHARE = 0.5
+
+# At most one removal instruction per base. Some val2017 bases came out as
+# nothing but removals ("remove the bottle, erase the cup, erase the book"):
+# that base's edited image is mostly inpainted background, its `background`
+# score is largely scoring our own inpainting, and corrupting an already
+# emptied region is a weak stimulus. Over the cap, a removable category falls
+# back to the material family instead of being dropped - dropping would change
+# the region count that `candidates()` reported to `survey`.
+MAX_REMOVALS_PER_BASE = 1
 
 # Categories that tolerate a recolour instruction sensibly.
 # Every name here must be one of COCO's 80; tests/test_stage0.py enforces that,
@@ -86,11 +104,38 @@ PERSONLIKE = {"person"}
 REMOVABLE = {"bottle", "cup", "bowl", "book", "clock", "potted plant",
              "fire hydrant", "parking meter", "stop sign", "traffic light"}
 
-INSTRUCTABLE = RECOLORABLE | PERSONLIKE | REMOVABLE
+# Categories a material swap reads sensibly on: solid objects with a surface.
+# Deliberately a SUBSET of RECOLORABLE | REMOVABLE, so INSTRUCTABLE - and
+# therefore the base yield - is byte-identical to before this family existed.
+# Categories move between instruction pools; none joins or leaves selection.
+# It is also a SUPERSET of REMOVABLE, which is what makes the removal cap safe:
+# a removable category over the cap always has somewhere to fall back to.
+MATERIALIZABLE = {"chair", "couch", "bed", "bench", "vase", "suitcase",
+                  "handbag", "backpack", "umbrella", "car", "boat", "bicycle",
+                  "surfboard", "tie", "truck", "bus", "motorcycle", "kite",
+                  "bottle", "cup", "bowl", "book", "clock", "potted plant",
+                  "fire hydrant", "parking meter", "stop sign", "traffic light"}
+
+INSTRUCTABLE = RECOLORABLE | PERSONLIKE | REMOVABLE | MATERIALIZABLE
+
+
+def _draw_unique(rng: random.Random, pool: list, used: Optional[set]) -> str:
+    """Pick from `pool`, preferring values this image has not used yet.
+
+    More regions than pool entries: fall back rather than fail. max_regions is
+    5 and both pools are 5 long, so the fallback is unreachable today.
+    """
+    free = [v for v in pool if v not in (used or ())]
+    v = rng.choice(free or pool)
+    if used is not None:
+        used.add(v)
+    return v
 
 
 def instruction_for(label: str, rng: random.Random,
-                    used_colors: Optional[set] = None) -> Optional[str]:
+                    used_colors: Optional[set] = None,
+                    used_materials: Optional[set] = None,
+                    allow_remove: bool = True) -> Optional[str]:
     """Draw one instruction for a label, or None if we cannot instruct it.
 
     CONSUMES RNG STATE. It used to be called twice per region - once in
@@ -100,25 +145,38 @@ def instruction_for(label: str, rng: random.Random,
     scanned first. `select` now carries the validated instruction through, so
     this is drawn exactly once per region.
 
-    `used_colors` keeps two regions of the SAME image from being sent to the
-    same colour. Independent draws produced real instructions like
-    "change the car to yellow, change the motorcycle to yellow", which is a bad
-    stimulus for a spatial-credit audit: the two regions end up visually
-    interchangeable, so a judge that confuses them is indistinguishable from a
-    judge that is merely colour-blind to position. Pass a per-image set.
+    `used_colors` / `used_materials` keep two regions of the SAME image from
+    being sent to the same colour or the same material. Independent draws
+    produced real instructions like "change the car to yellow, change the
+    motorcycle to yellow", which is a bad stimulus for a spatial-credit audit:
+    the two regions end up visually interchangeable, so a judge that confuses
+    them is indistinguishable from a judge that is merely colour-blind to
+    position. Pass a per-image set for each.
+
+    `allow_remove=False` means this base has already spent its one removal;
+    the label falls through to the material family. See MAX_REMOVALS_PER_BASE.
     """
-    if label in RECOLORABLE:
-        free = [c for c in COLORS if c not in (used_colors or ())]
-        # More recolourable regions than colours: fall back rather than fail.
-        # max_regions is 5 and so is len(COLORS), so this is unreachable today.
-        color = rng.choice(free or COLORS)
-        if used_colors is not None:
-            used_colors.add(color)
+    if label in REMOVABLE and allow_remove:
+        return rng.choice(REMOVE_TEMPLATES).format(label=label)
+
+    can_color = label in RECOLORABLE
+    can_material = label in MATERIALIZABLE
+    if can_color or can_material:
+        # Per-region draw, so one photograph mixes the two families. The
+        # measured val2017 design was 56.7% recolour - a colour monoculture
+        # that makes "the judge tracks hue" and "the judge tracks the region"
+        # hard to tell apart.
+        use_material = (rng.random() < MATERIAL_SHARE
+                        if can_color and can_material else can_material)
+        if use_material:
+            material = _draw_unique(rng, MATERIALS, used_materials)
+            return rng.choice(MATERIAL_TEMPLATES).format(label=label,
+                                                         material=material)
+        color = _draw_unique(rng, COLORS, used_colors)
         return rng.choice(COLOR_TEMPLATES).format(label=label, color=color)
+
     if label in PERSONLIKE:
         return rng.choice(ATTR_TEMPLATES).format(label=label)
-    if label in REMOVABLE:
-        return rng.choice(REMOVE_TEMPLATES).format(label=label)
     return None
 
 
@@ -207,9 +265,19 @@ def select(coco: CocoLike, cfg: dict, rng: random.Random):
         if not (cfg["min_regions"] <= len(cand) <= cfg["max_regions"]):
             continue
 
-        keep, colors = [], set()
+        keep, colors, materials = [], set(), set()
+        removals = 0
         for a, label, frac in cand:
-            keep.append((a, label, frac, instruction_for(label, rng, colors)))
+            # The cap is spent by the FIRST removable category in annotation
+            # order; the rest of them fall back to the material family. Whether
+            # a removal was issued is decided here, not read back out of the
+            # string, so "erase" appearing in a label could never miscount it.
+            allow = removals < MAX_REMOVALS_PER_BASE
+            instr = instruction_for(label, rng, colors, materials,
+                                    allow_remove=allow)
+            if allow and label in REMOVABLE:
+                removals += 1
+            keep.append((a, label, frac, instr))
         yield info, keep
 
 
