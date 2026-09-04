@@ -196,6 +196,41 @@ Caveat on both: those bases predate the category-uniqueness rule, which hits
 `person` hardest (people almost never appear alone). Every proportion above will
 shift. Treat it as the shape of the old design, not a prediction.
 
+### After the fix — measured on the real `main` selection, 2026-09-04
+
+150 train2017 bases, 476 regions, **3.17 regions/base**, under the uniqueness
+rule and with the material family, the one-removal cap and the beard/moustache
+templates all live:
+
+| family | regions | share | was |
+|---|---|---|---|
+| material | 164 | **34.5%** | — |
+| colour | 148 | **31.1%** | 56.7% |
+| person attribute | 99 | 20.8% | 27.5% |
+| remove / erase | 65 | 13.7% | 15.8% |
+
+**The monoculture is gone**: no family is now more than about a third, against
+colour's old 57%. Colour and material together are 65.6% — higher than colour
+alone was — because removable categories over the cap fall back to material,
+which moves mass out of `remove` and into `material` rather than out of the
+image-editing task.
+
+Three checks passed on the same run, all of which fail silently if broken:
+**0 removal-cap violations** (65 removals over 150 bases, never 2 in one), **0
+ambiguous clauses** (every region matches exactly one family — no region asked
+to be both red and marble), and every base 3-5 regions.
+
+Two predictions from the table above came true. `person` fell from 27.5% to
+20.8%, which is the uniqueness rule hitting the category that almost never
+appears alone. And `remove` barely moved, 15.8% -> 13.7%: most bases only ever
+had one removable category, so the cap trimmed a tail rather than reshaping the
+design — which is also why capping was the cheap fix and dropping removals
+outright was not needed to buy diversity.
+
+`regions/base` came out 3.17 against the 3.19 config.yaml had assumed from
+val2017 pre-rule. The uniqueness rule cost 75% of the *images* and essentially
+nothing per surviving image: a photo qualifies whole or not at all.
+
 ---
 
 ## Deviations from the paper, to state in any write-up
