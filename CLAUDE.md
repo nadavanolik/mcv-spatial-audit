@@ -396,6 +396,35 @@ section is history plus the residual risk in each):**
     also removes our dependence on pycocotools' `iscrowd=` comparison, which
     was on the unverified list above.
 
+  **Instruction-family distribution, measured 2026-09-04** on the ~120 val2017
+  bases then on disk (360 regions, from `cat data/bases/*/instruction.txt`):
+
+  | family | regions | share |
+  |---|---|---|
+  | recolour | 204 | **56.7%** |
+  | remove / erase | 57 | 15.8% |
+  | add sunglasses | 50 | 13.9% |
+  | make older | 49 | 13.6% |
+
+  Removal targets by category: cup 13, potted plant 11, bowl 11, book 6,
+  bottle 5, traffic light 3, parking meter 3, clock 2, fire hydrant 2,
+  stop sign 1. `person` is **27.5% of all regions** — COCO's commonest
+  category — and half of those draw "make the person look older", the vaguest
+  instruction in the set and the hardest to score on the success axis.
+
+  Two things this corrects:
+  - **Removal is ~16% of regions, not the ~1/3** implied by "10 of 29
+    categories". Categories are not equally frequent. Whatever the
+    `score_preserve` question resolves to, it costs 16% of target regions.
+  - **The colour monoculture already exists.** 57% of regions are "change this
+    object's hue"; dropping removal would take it to ~67%. Removal is not what
+    protects instruction diversity, so adding a material/texture family is
+    worth doing on its own merits and independent of the removal decision.
+
+  Caveat on both: those bases predate the uniqueness rule, which will hit
+  `person` hardest of all (people almost never appear alone). Every proportion
+  above will shift. Treat it as the shape of the old design, not a prediction.
+
   `select` also now rejects on the region-count window *before* drawing
   instructions, so an unusable image no longer advances the RNG stream.
   **Any change to this filter restales every `edit.png`** — `stage1_edit`
@@ -676,10 +705,49 @@ the harness.
   changes corruption bytes, so all five VMs re-run the determinism check and
   any judged data is void -- too much for a ladder on the one corruption we
   already know is the strongest stimulus.
-- **`REMOVE_TEMPLATES` in stage 0.** Still generates "remove the X"
-  instructions, which collide with `remove` being a corruption, and make
-  "how well is this region preserved" ill-posed for a region the instruction
-  deleted. Raised twice, never decided.
+- **`REMOVE_TEMPLATES` in stage 0 — STILL OPEN, but the framing was wrong.**
+  It generates "remove the X" instructions, which collide with `remove` being
+  a corruption. The stronger objection was that "how well is this region
+  preserved" is ill-posed for a region the instruction deleted — a correct
+  removal would score ~0 on preserve, hence phi = min(success, preserve) = 0,
+  the floor, and `drop_floored` would then discard those regions entirely.
+
+  **That claim is NOT established and was overstated (corrected 2026-09-04).**
+  A.4.3's OUTPUT FORMAT names the axis `score_preserve` and defines it as
+  "0=completely different, 25=minimal effective edit" — but its RULES section
+  calls the same quantity the "overall overediting score", and the BACKGROUND
+  rule is framed identically ("Penalize unexpected edits, layout changes,
+  artifacts outside editing regions"). Under the overediting reading, a clean
+  removal that did not disturb its surroundings is a minimal effective edit and
+  should score HIGH. The prompt is genuinely ambiguous and the paper's own
+  gloss argues against the pessimistic reading.
+
+  **Settle it by measurement, not by reading.** The question is not what the
+  rubric means but what base Qwen3-VL-8B does with it. Compare `sc_preserve` on
+  removal-target regions against recolour-target regions, clean controls only,
+  same images:
+
+      python - <<'EOF'
+      import pandas as pd, glob
+      df = pd.concat(pd.read_parquet(f) for f in glob.glob("out/scores_shard*.parquet"))
+      c = df[df.is_control & (df.scored_region_id == df.target_region_id)]
+      print(c[["base_id","instruction","scored_region_id","sc_success","sc_preserve"]].to_string())
+      EOF
+
+  The pilot scores parquet lives on `mcvgpu2025s-0050`, not 0053.
+  Whatever the answer: if base Qwen reads that axis differently from how the
+  paper means it, that gap is itself reportable. We audit the prompt-based
+  protocol, not the released fine-tuned reward model, and an axis ambiguous
+  enough to be read two ways is exactly what that distinction exists to catch.
+
+  Two things hold regardless of the answer:
+  - **At most one removal per base.** Some existing bases are entirely
+    removals ("remove the bottle, erase the cup, erase the book"). That base's
+    edited image is mostly inpainted background, its `background` score is
+    largely scoring our own inpainting, and corrupting an emptied region is a
+    weak stimulus.
+  - **The colour monoculture is the real diversity problem, not removal.**
+    See the instruction-family distribution in the stage-0 notes above.
 
 **FOR THE WRITE-UP (do not lose):**
 
