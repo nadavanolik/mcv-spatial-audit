@@ -240,6 +240,21 @@ def survey(coco: CocoLike, cfg: dict, rng: Optional[random.Random] = None) -> di
     return {"n_images": n_img, "hist": dict(sorted(hist.items())), "usable": usable}
 
 
+def image_url(info: dict, coco_json: str) -> str:
+    """Where to download one COCO image from.
+
+    COCO records carry `coco_url` outright. The fallback reconstructs it from
+    the annotations filename ("instances_train2017.json" -> "train2017"), which
+    is the same scheme the site uses, in case a derived annotations file has
+    dropped the field.
+    """
+    url = info.get("coco_url")
+    if url:
+        return url
+    split = Path(coco_json).stem.split("_")[-1]
+    return f"http://images.cocodataset.org/{split}/{info['file_name']}"
+
+
 def write_base(out_dir: Path, info, keep, coco: CocoLike, images_dir: Path):
     base_id = f"{info['id']:012d}"
     d = out_dir / base_id
@@ -280,7 +295,14 @@ def main():
                     help="report how many bases the filter would yield, and "
                          "the distribution of usable regions per image, then "
                          "exit. Needs only the annotations file - no images, "
-                         "no writes. Run this BEFORE downloading val2017.")
+                         "no writes. Run this BEFORE downloading any images.")
+    ap.add_argument("--list-urls", action="store_true",
+                    help="print the download URL of each image selection would "
+                         "use, most-preferred first, then exit. Feed to "
+                         "`wget -P <dir> -i -`. train2017 qualifies about 1 "
+                         "image in 100, so fetching the whole 18GB split to "
+                         "keep 150 files is 700x more download than the job "
+                         "needs, and does not fit beside FLUX on a 90G root.")
     a = ap.parse_args()
 
     from pycocotools.coco import COCO
@@ -288,6 +310,13 @@ def main():
     print(f"selection: {cfg}")
     rng = random.Random(a.seed)
     coco = COCO(a.coco)
+
+    if a.list_urls:
+        for i, (info, _) in enumerate(select(coco, cfg, rng)):
+            if i >= a.n:
+                break
+            print(image_url(info, a.coco))
+        return
 
     if a.survey:
         s = survey(coco, cfg, rng)

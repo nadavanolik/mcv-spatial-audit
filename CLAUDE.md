@@ -273,16 +273,29 @@ from source" warning is retired.)
   floor.
 - **`pycocotools` ships manylinux wheels** (2.0.11) and needs no compiler. The
   "builds from source, needs gcc" note in README/requirements-coco is stale.
-- **Stage 0 yield: 187 usable bases from val2017's 5000 images** (3.7%).
-  Histogram of instructable regions per image: `0:2206  1:1883  2:724  3:150
-  4:35  5:2`. 187 covers `main`'s 100 with room to spare; it does not cover
-  `full_cross`'s 200, which is out of scope anyway. Mean 3.21 regions/base.
-  If more are ever needed, train2017 at the same rate gives ~4,400 — but it is
-  19GB and will not fit next to FLUX on the 90G disk.
-  **STALE as of 2026-09-03:** this predates the category-uniqueness rule below,
-  which can only reduce it. `person` and `car` are COCO's two commonest
-  categories and rarely appear alone, so the drop may be large. Re-run
-  `--survey` before choosing `--n`; 187 is now only the ceiling.
+- **Stage 0 yield, and why the dataset changed to train2017 (2026-09-04).**
+  Measured on `mcvgpu2025s-0053`, val2017's 5000 images:
+
+  | | usable bases | histogram of usable regions per image |
+  |---|---|---|
+  | before category uniqueness (2026-08-26) | **187** (3.7%) | `0:2206 1:1883 2:724 3:150 4:35 5:2` |
+  | after (2026-09-03) | **46** (0.92%) | `0:3202 1:1414 2:338 3:38 4:6 5:2` |
+
+  The rule cost 75% of the pool, as suspected — `person` and `car` are COCO's
+  two commonest categories and rarely appear alone. 46 does not cover `main`'s
+  100, let alone 150.
+
+  **Resolved by switching to train2017, keeping the strict rule.** 118,287
+  images at the same 0.92% is ~1,090 bases. The old note here said train2017
+  "is 19GB and will not fit next to FLUX on the 90G disk" — true of the split,
+  irrelevant to us: **we never need the split.** `--survey` reads annotations
+  only, and `--list-urls` prints the download URL of each qualifying image
+  (from the record's own `coco_url`), so `wget -i` fetches ~200 files / ~30MB.
+  Do not download an image split; the filter discards 99 of every 100.
+
+  The train/val distinction carries no meaning for this audit: nothing is
+  trained, and both splits are equally public to FLUX and to Qwen. Worth one
+  sentence in the report to pre-empt the question, not a caveat.
 
 **The full pipeline runs on real data (2026-08-26, `mcvgpu2025s-0050`).**
 stage 0 -> 1 -> manifest -> 2 -> 3 -> 4 end to end, 100 base specs, 5 edited,
@@ -664,13 +677,13 @@ the harness.
   a problem for RL training regardless of whether it localises.
 
 **Do next, in order:**
-1. **Re-run `--survey` under the category-uniqueness rule** and pick `--n` from
-   what survives. This gates everything: it decides the base count, and it must
-   land before stage 1 runs at scale because changing the filter restales every
-   `edit.png`. 187 was the pre-rule ceiling.
-2. Editor VM: re-run stage 0, then edit the chosen number of bases (~189s
-   each), then `tar czf bases.tar.gz -C data bases` and upload. Everything
-   downstream is blocked on that tarball.
+1. ~~Re-run `--survey` under the category-uniqueness rule~~ **DONE 2026-09-03:
+   val2017 yields 46. Switched to train2017 (~1,090 expected); confirm with
+   `--survey` on `instances_train2017.json`, then `--list-urls | wget`.**
+2. Editor VM: re-run stage 0 against train2017, then edit the chosen number of
+   bases (~189s each), then `tar czf bases.tar.gz -C data bases` and upload.
+   Everything downstream is blocked on that tarball. Note the base ids change
+   completely — they are COCO image ids, and the split changed.
 3. ~~Run the pilot~~ **DONE — verdict GO, see PILOT VERDICT above.** The axis
    table turned out to be the wrong readout: the informative one is the tie
    rate (`sensitivity`), because 53-80% of damaged regions do not move at all
@@ -678,7 +691,8 @@ the harness.
 4. Cross-VM determinism hash from the two VMs that have not reported it.
 5. `main`: **~1.1h/VM** at greedy, sharded five ways (3.1h at n=5).
 
-**Base count is open (raised 2026-09-03).** 100 vs 150 costs 2.7 extra hours on
+**Base count is open (raised 2026-09-03).** No longer pool-limited now that
+train2017 supplies ~1,090. 100 vs 150 costs 2.7 extra hours on
 the editor VM (5.3h -> 8.0h, serial, blocking) and nothing anywhere else —
 stage 3 goes 1.1 -> 1.7h/VM, disk is a rounding error. What it buys is modest
 and worth stating honestly: regions within an image are NOT independent (that

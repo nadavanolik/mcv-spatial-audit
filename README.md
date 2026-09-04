@@ -98,22 +98,35 @@ hf auth login     # FLUX.1-Kontext-dev is gated; accept the licence on its model
 Only the machine running stage 0 needs COCO. Everyone else works from
 `bases.tar.gz`.
 
+**Never download an image split.** The selection filter keeps roughly 1 image
+in 100, so fetching train2017's 18GB to keep ~150 files is 700x more transfer
+than the job needs, and does not fit beside FLUX on a 90G root. Annotations
+first, then only the images that actually qualify.
+
 ```bash
 mkdir -p data/coco && cd data/coco
 
-# Annotations, 241MB. Naming the one member skips instances_train2017.json,
-# which is ~450MB you will never open.
+# Annotations for both splits, 241MB.
 wget http://images.cocodataset.org/annotations/annotations_trainval2017.zip
-unzip -o annotations_trainval2017.zip annotations/instances_val2017.json
+unzip -o annotations_trainval2017.zip \
+    annotations/instances_train2017.json annotations/instances_val2017.json
 rm annotations_trainval2017.zip
+cd ../..
 
-# Images, 1GB. NOT needed for --survey; skip until the survey looks right.
-wget http://images.cocodataset.org/zips/val2017.zip
-unzip -q val2017.zip && rm val2017.zip
+# What would the filter yield? No images, no writes, ~1 minute.
+python -m src.stage0_coco --coco data/coco/annotations/instances_train2017.json --survey
+
+# Fetch ONLY the qualifying images. Ask for more than you need, so one failed
+# download does not shift which images get used.
+python -m src.stage0_coco --coco data/coco/annotations/instances_train2017.json \
+    --n 200 --list-urls > /tmp/urls.txt
+wget -q -P data/coco/train2017 -i /tmp/urls.txt      # ~200 files, ~30MB
 ```
 
-train2017 is deliberately not used: 19GB, and it will not fit next to FLUX on
-the 90G root.
+val2017 (5,000 images) yields only ~46 bases under the category-uniqueness
+rule, so **use train2017** — 118,287 images at the same rate is ~1,090. The
+train/val distinction carries no meaning here: this audit trains nothing, and
+both splits are equally public to the models involved.
 
 ## Pipeline
 
@@ -140,8 +153,8 @@ decoding. The `main` profile is **~1.1h/VM** sharded five ways.
 
 ```bash
 # stages 0 + 1 — editor VM only, once
-python -m src.stage0_coco --coco data/coco/annotations/instances_val2017.json \
-    --images data/coco/val2017 --out data/bases --n 100
+python -m src.stage0_coco --coco data/coco/annotations/instances_train2017.json \
+    --images data/coco/train2017 --out data/bases --n 150
 python -m src.stage1_edit --limit 100
 
 # everyone, once bases.tar.gz is distributed
@@ -166,6 +179,7 @@ would have caught.
 
 ```bash
 python -m src.stage0_coco --coco … --survey       # base yield, no images needed
+python -m src.stage0_coco --coco … --list-urls    # fetch only qualifying images
 python -m src.stage1_edit --preflight             # API, auth, gating, disk, VRAM fit
 python -m src.stage3_judge … --dry-run            # builds every request, never imports vLLM
 python -m scripts.diagnose_parse --scores …       # why judge responses failed

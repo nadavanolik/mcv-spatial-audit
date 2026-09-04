@@ -149,16 +149,17 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
    the regions inside one photo don't count as separate samples. That's our
    own finding: the judge treats a photo as one thing.
 
-   It's also capped by a change we just made. A photo now only qualifies if
-   each object we edit appears exactly **once** in it — otherwise "make the car
-   red" is ambiguous when there are three cars, and neither the editor nor the
-   judge can know which one we meant. That was letting avoidable noise into the
-   results. It also throws photos away, and nobody knows how many yet.
+   We also tightened which photos qualify: each object we edit must appear
+   exactly **once** in the picture. Otherwise "make the car red" is ambiguous
+   when there are three cars, and neither the editor nor the judge can know
+   which one we meant — avoidable noise we were creating ourselves.
 
-   **So: run the survey, see what's left, then pick the number.** The survey
-   takes ten minutes and needs no images. Do it before any editing starts —
-   changing this filter changes every instruction, which invalidates any images
-   already edited.
+   That rule threw away three quarters of our photos, so we switched from
+   COCO's small split to its large one: 46 usable photos became roughly 1,090.
+   We download only the couple of hundred we actually use, not the 18GB set.
+   So the photo count is now our choice rather than a limit — **pick a number
+   before any editing starts.** Changing this filter changes every instruction,
+   which invalidates any images already edited.
 
 ## Two things that must reach the report
 

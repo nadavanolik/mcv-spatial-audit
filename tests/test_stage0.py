@@ -333,6 +333,24 @@ def main() -> int:
                 s["usable"] == len(got), f"{s['usable']} vs {len(got)}")
 
     print("\n" + "=" * 68)
+    print("8. IMAGE_URL points at one image, not at the whole split")
+    print("=" * 68)
+    # train2017 qualifies ~1 image in 100, so --list-urls + wget fetches ~30MB
+    # instead of the 18GB split, which would not fit beside FLUX anyway.
+    ok &= check("coco_url is used when COCO provides it",
+                S.image_url({"coco_url": "http://x/train2017/1.jpg",
+                             "file_name": "1.jpg"}, "instances_train2017.json")
+                == "http://x/train2017/1.jpg")
+    url = S.image_url({"file_name": "000000000009.jpg"},
+                      "data/coco/annotations/instances_train2017.json")
+    ok &= check("the fallback derives the split from the annotations filename",
+                url == "http://images.cocodataset.org/train2017/000000000009.jpg",
+                url)
+    ok &= check("and works for val2017 too",
+                S.image_url({"file_name": "9.jpg"}, "instances_val2017.json")
+                == "http://images.cocodataset.org/val2017/9.jpg")
+
+    print("\n" + "=" * 68)
     print("ALL PASS" if ok else "FAILURES ABOVE")
     print("=" * 68)
     return 0 if ok else 1
