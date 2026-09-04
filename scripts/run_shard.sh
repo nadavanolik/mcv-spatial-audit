@@ -43,9 +43,24 @@ fi
 python -m src.stage2_corrupt --manifest out/manifest.parquet \
     --bases data/bases --out "$SCRATCH" --shard "$SHARD" --of "$OF"
 
+# Greedy, stated here rather than inherited from stage3_judge's defaults. This
+# script used to pass neither flag, so whatever the module happened to default
+# to silently became the main run's configuration -- and for a while that was
+# n=5 @ T=0.7, the setting that produced an unreadable pilot.
+#
+# Deliberately NOT overridable by an environment variable. Sampling has to
+# match across all five VMs for the shards to be comparable, exactly like
+# --gpu-util, and a per-VM override is a way to break that quietly. The noise
+# floor is a separate, deliberate command with its own --out (this one would
+# overwrite the shard):
+#
+#   python -m src.stage3_judge --manifest out/manifest.parquet --bases data/bases \
+#       --variants "$SCRATCH" --shard 0 --of 1 --temperature 0.7 --n-samples 5 \
+#       --out out/nuisance/floor_baseline.parquet
 python -m src.stage3_judge --manifest out/manifest.parquet \
     --bases data/bases --variants "$SCRATCH" --model "$MODEL" \
-    --shard "$SHARD" --of "$OF" --out "out/scores_shard${SHARD}.parquet"
+    --shard "$SHARD" --of "$OF" --temperature 0 --n-samples 1 \
+    --out "out/scores_shard${SHARD}.parquet"
 
 # Reclaim RAM; regenerating is cheap (~3s). Set KEEP_SCRATCH=1 while iterating
 # on stage 3 -- otherwise the next judge run dies on a missing variant and the

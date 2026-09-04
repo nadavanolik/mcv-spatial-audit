@@ -586,8 +586,22 @@ def main():
     ap.add_argument("--out", help="output parquet; required unless --dry-run")
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--of", type=int, default=1)
-    ap.add_argument("--n-samples", type=int, default=5)
-    ap.add_argument("--temperature", type=float, default=0.7)
+    # Greedy, decided 2026-09-04. These were n=5 @ T=0.7, and that was not an
+    # arbitrary choice -- it bought two things. (1) The noise floor:
+    # stage4.noise_floor is the SD across repeated samples of one input, and
+    # there is no other way to get it. (2) The expected-score readout, which
+    # needed logprobs over several samples. Reason (2) is dead: logprobs are
+    # gone and expected_score_from_logprobs raises. Reason (1) is still real,
+    # but it makes n=5 a MEASURING INSTRUMENT, not a production setting -- and
+    # it had been left switched on for the main run, where it produced a pilot
+    # nobody could read (the judge disagreed with itself by 38% of the scale on
+    # byte-identical input) at 2.8x the cost.
+    #
+    # So: greedy here, and the floor comes from one small deliberate run:
+    #   --temperature 0.7 --n-samples 5   over the same variants, own --out.
+    # Like --gpu-util, this must match across all five VMs.
+    ap.add_argument("--n-samples", type=int, default=1)
+    ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--limit", type=int, default=None, help="pilot mode: cap variants")
     # max_model_len is the concurrency divisor: vLLM's max concurrency is
     # KV-cache-tokens / max_model_len. Our prompts are ~950 tokens and outputs
@@ -626,6 +640,20 @@ def main():
                     help="build the requests and print the first one, without "
                          "importing vLLM — runs on a machine with no GPU")
     a = ap.parse_args()
+
+    # A footgun the greedy default creates: asking for repeated samples without
+    # also raising the temperature. Decoding is deterministic at T=0 with a
+    # fixed seed, so all n come back identical, the within-variant SD is 0, and
+    # the noise floor -- the only reason to pay for n>1 -- is not measured.
+    # Stage 4 does report a zero floor honestly, but by then the GPU time is
+    # spent, so say it before the engine loads rather than after.
+    if a.n_samples > 1 and a.temperature == 0:
+        print(f"WARNING: --n-samples {a.n_samples} at --temperature 0 gives "
+              f"{a.n_samples} IDENTICAL samples.\n"
+              f"         Greedy decoding is deterministic, so this costs "
+              f"{a.n_samples}x and measures no noise floor.\n"
+              f"         For a floor run add --temperature 0.7; otherwise drop "
+              f"to --n-samples 1.")
 
     df = shard(pd.read_parquet(a.manifest), a.shard, a.of)
     if a.limit:
@@ -666,6 +694,12 @@ def main():
     res = run(llm, msgs, meta, a.n_samples, a.temperature,
               structured=not a.no_structured, reasoning=a.reasoning)
     res["judge"] = a.model
+    # Provenance, alongside the model. Sampling moves the numbers further than
+    # the choice between two Qwen sizes does, and a merged set of five shards
+    # otherwise cannot say how any of them was decoded -- which is exactly the
+    # ambiguity scripts/nuisance_report.py has to work around by filename.
+    res["n_samples"] = a.n_samples
+    res["temperature"] = a.temperature
 
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     res.to_parquet(a.out)
