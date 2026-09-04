@@ -37,7 +37,9 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import sys
 from collections import Counter
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Optional, Protocol
 
@@ -374,10 +376,20 @@ def main():
     a = ap.parse_args()
 
     from pycocotools.coco import COCO
+
+    # Under --list-urls, stdout IS the wget input file: every line has to be a
+    # URL. Both our own banner and pycocotools' four "loading annotations into
+    # memory... / index created!" lines go to stdout by default, so a naive
+    # `--list-urls | wget -i -` hands wget five junk "URLs" to fail on, and
+    # `wc -l` reports 155 for a 150-image run. Send both to stderr instead, so
+    # the progress chatter still reaches a terminal but never the pipe.
+    chatter = sys.stderr if a.list_urls else sys.stdout
+
     cfg = load_selection_cfg(a.config)
-    print(f"selection: {cfg}")
+    print(f"selection: {cfg}", file=chatter)
     rng = random.Random(a.seed)
-    coco = COCO(a.coco)
+    with redirect_stdout(chatter):
+        coco = COCO(a.coco)
 
     if a.list_urls:
         for i, (info, _) in enumerate(select(coco, cfg, rng)):
