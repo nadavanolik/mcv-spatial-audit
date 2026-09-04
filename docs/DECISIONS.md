@@ -227,12 +227,18 @@ VRAM, not disk — unloading a judge or clearing the cache changes nothing.
 `enable_sequential_cpu_offload` streams submodules and is the default. Peak VRAM
 **2.39GiB of ~21GiB**.
 
-### 191.4s/image at 28 steps
+### 191.4s/image at 28 steps on `0050`; 215.4s on `0004`
 
-pilot (5) = 16 min, `main` (150) = 8.0h, `full_cross` (200) = 10.6h. `main` fits
-an overnight run, so no quantization is needed. If it ever is, the lever is an
-NF4 transformer (~6GB, resident, removing the PCIe round trip that dominates),
-**not** fewer steps — the card is 90% idle, not compute-bound.
+Re-measured on `mcvgpu2025s-0004`, 2026-09-04: **215.4s/image**, same 28 steps,
+same sequential offload, same peak VRAM (2.39GiB). 13% slower than `0050` — the
+stage is PCIe-bound under sequential offload, so per-VM host bandwidth moves it.
+Time the VM you will actually run on; do not inherit a sibling's figure.
+
+At 215.4s: pilot (5) = 18 min, `main` (150) = **9.0h**, `full_cross` (200) =
+12.0h, plus ~6 min to load the pipeline. `main` still fits one night, so no
+quantization is needed. If it ever is, the lever is an NF4 transformer (~6GB,
+resident, removing the PCIe round trip that dominates), **not** fewer steps —
+the card is 90% idle, not compute-bound.
 
 ### The resize-back is load-bearing
 
@@ -637,8 +643,9 @@ Only a judge VM can settle these:
 
 ## Base count: `main` is 150 bases (decided 2026-09-04)
 
-`config.yaml` says so. Not pool-limited — train2017 supplies ~1,090. The 50 over
-100 cost 2.7 extra hours on the editor VM (5.3h -> 8.0h, serial, blocking) and
+`config.yaml` says so. Not pool-limited — train2017 supplies 1,372, measured by
+`--survey` on 2026-09-04. The 50 over 100 cost ~3.0 extra hours on the editor VM
+(6.0h -> 9.0h at 215.4s/image, serial, blocking) and
 nothing anywhere else: stage 3 goes 1.1 -> 1.7h/VM, disk is a rounding error.
 
 State the gain honestly rather than overselling it: regions within an image are

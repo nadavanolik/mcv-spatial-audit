@@ -71,13 +71,15 @@ def main() -> int:
     ap.add_argument("--steps", type=int, default=28)
     ap.add_argument("--guidance", type=float, default=2.5)
     ap.add_argument("--size", type=int, default=448)
-    # 100, not 200. config.yaml's `main` profile -- the one sized to the
-    # proposal's budget -- is 100 bases; 200 is `full_cross`, which the
+    # 150, not 200. config.yaml's `main` profile -- the one sized to the
+    # proposal's budget -- is 150 bases; 200 is `full_cross`, which the
     # guardrails say not to run casually. Extrapolating to 200 by default made
-    # a perfectly workable 5.3h read as a 10.6h failure.
-    ap.add_argument("--n-bases", type=int, default=100,
+    # a perfectly workable run read as a 12h failure, and the default sat at
+    # 100 after `main` moved to 150, so the table never printed the one number
+    # the editor VM actually needs.
+    ap.add_argument("--n-bases", type=int, default=150,
                     help="extrapolate the wall clock to this many bases "
-                         "(100 = config.yaml `main`; 5 = `pilot`)")
+                         "(150 = config.yaml `main`; 5 = `pilot`)")
     ap.add_argument("--offload", default="sequential",
                     choices=["sequential", "model"],
                     help="sequential is the only mode that fits on a 24GB A10")

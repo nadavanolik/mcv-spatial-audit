@@ -133,7 +133,7 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 
 | Role | Where it stands | Next |
 |---|---|---|
-| **Editor VM** | 150 photos selected and downloaded, 476 regions written, editor checked and ready | Edit all 150 (~3 min each, one overnight run), then `tar czf bases.tar.gz -C data bases` and upload. **Everyone else is waiting on this.** |
+| **Editor VM** | 150 photos selected and downloaded, 476 regions written, editor checked and ready | Edit all 150 (~3.5 min each, about 9h - one overnight run), then `tar czf bases.tar.gz -C data bases` and upload. **Everyone else is waiting on this.** |
 | **Judge harness** | working, 100% parse, real published prompt, sampling decided | Nothing blocking. Run the nuisance sweep on the first VM that gets the photos — ~1h, no coordination needed |
 | **Corruption + manifest** | determinism confirmed on 3 of 5 VMs | Chase the other two. Own `config.yaml` |
 | **Analysis** | stage 4 runs on real data | Start the figures. The tie-rate and coherence tables are the headline ones, not AUROC |

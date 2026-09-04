@@ -202,8 +202,8 @@ All five test suites pass on the laptop. Cross-VM determinism is confirmed on
 **Do next, in order:**
 
 1. Editor VM: `--survey` on `instances_train2017.json`, then
-   `--list-urls | wget`, then stage 0, then edit 150 bases (~191s each,
-   ~8h overnight), then `tar czf bases.tar.gz -C data bases` and upload.
+   `--list-urls | wget`, then stage 0, then edit 150 bases (~215s each,
+   ~9h overnight), then `tar czf bases.tar.gz -C data bases` and upload.
    **Everything downstream is blocked on that tarball.** Base ids change
    completely — they are COCO image ids and the split changed.
 2. Cross-VM determinism hash from the two VMs that have not reported it.
