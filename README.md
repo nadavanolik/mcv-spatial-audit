@@ -32,6 +32,7 @@ src/stage4_analyze.py     measurement quality, tie rate, coherence, AUROC,
                           leakage matrix, redundancy, noise floor
 
 scripts/setup.sh          one-command bootstrap for a role, then the hash check
+scripts/stage0.sh         data/bases from nothing: annotations, images, select
 scripts/run_shard.sh      one VM's share of stages 2+3
 scripts/smoke_edit.py     one real FLUX edit on a synthetic image   [editor VM]
 scripts/smoke_judge.py    one real judge call on synthetic images   [judge VM]
@@ -109,6 +110,22 @@ in 100, so fetching train2017's 18GB to keep ~150 files is 700x more transfer
 than the job needs, and does not fit beside FLUX on a 90G root. Annotations
 first, then only the images that actually qualify.
 
+One command does all of it — annotations, only the qualifying images, and the
+selection itself:
+
+```bash
+bash scripts/stage0.sh          # 150 bases from train2017; N=5 for a smoke run
+```
+
+It refuses to overwrite an existing `data/bases` (stage 0 output is regenerated,
+never merged in place) and re-fetches only images that are missing, so an
+interrupted run is safe to repeat. **Base specs are regenerated per machine, not
+transferred**: stage 0 is a pure function of the annotations file, `config.yaml`
+and `--seed`, so every VM that runs this gets the same 150 photographs, regions
+and instructions. `build_manifest` prints a hash that proves it.
+
+The same thing by hand, if you want to see the steps:
+
 ```bash
 mkdir -p data/coco && cd data/coco
 
@@ -158,9 +175,11 @@ decoding. The `main` profile is 150 bases: **~1.7h/VM** sharded five ways.
 ## Usage
 
 ```bash
-# stages 0 + 1 — editor VM only, once
-python -m src.stage0_coco --coco data/coco/annotations/instances_train2017.json \
-    --images data/coco/train2017 --out data/bases --n 150
+# stage 0 — anywhere, CPU only, ~5 minutes. Run it on the editor VM before
+# stage 1; run it anywhere else instead of copying data/bases around.
+bash scripts/stage0.sh
+
+# stage 1 — editor VM only, once, ~8h for 150 bases
 python -m src.stage1_edit --limit 150
 
 # everyone, once bases.tar.gz is distributed
