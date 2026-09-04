@@ -131,15 +131,11 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 1. **Sampling config for the main run.** Right now we ask the judge 5 times at a
    random-ish temperature. That made our first pilot unreadable — the judge
    disagreed with *itself* by 38% of the scale on identical inputs. Switching to
-   deterministic fixed it, and cut the run from 3.1h to 1.1h per VM. Likely
+   deterministic fixed it, and cut the run roughly threefold. Likely
    answer: deterministic for the main run, plus a small sampled run to document
    the instability. **Decide before anyone starts the main run.**
 
-2. **`remove` has no severity ladder.** Its "mild" and "severe" settings differ
-   by 0.5 out of 35 — there's no gradient there at all. Either drop it from
-   severity comparisons or redefine what severity means for it.
-
-3. **"remove the X" instructions in stage 0.** They clash with `remove` also
+2. **"remove the X" instructions in stage 0.** They clash with `remove` also
    being one of our damage types, and "was this region preserved?" is
    meaningless for a region we told the editor to delete.
 
@@ -153,6 +149,13 @@ creating ourselves.
 That rule threw away three quarters of our photos, so we switched from COCO's
 small split to its large one: 46 usable photos became roughly 1,090. We
 download only the couple of hundred we actually use, not the 18GB set.
+
+**`remove` is now reported as one condition, not a severity ladder.** Its
+"mild" and "severe" settings differ by 0.5 out of 35 — inpainting deletes the
+object whichever setting you pick, so there was never a gradient. Left in the
+severity table, a flat response there would have looked like the judge ignoring
+severity, when really we never varied it. It still gets its own row everywhere
+else.
 
 **We're using 150 photographs, not 100.** The extra 50 cost one longer
 overnight run on the editor VM and nothing anywhere else. Be straight about

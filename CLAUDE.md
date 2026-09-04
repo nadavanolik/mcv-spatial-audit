@@ -659,11 +659,23 @@ the harness.
   argument against is that greedy gives no noise-floor estimate, so the answer
   is probably greedy for the main run plus a small `n=5 @ T=0.7` run on ~10
   bases purely to characterise the instability. Nobody has decided.
-- **Whether to keep `remove` on the severity axis.** Its severity 1 and 3
-  differ by 0.5 8-bit levels out of 35 -- the ladder is effectively binary.
-  Either drop `remove` from severity comparisons, or change what severity means
-  for it in `corruptions.py`. Leaving it as is means a flat remove-severity
-  response gets read as insensitivity when it is really an absent stimulus.
+- ~~**Whether to keep `remove` on the severity axis.**~~ **DECIDED
+  2026-09-04: dropped from severity comparisons, reported as binary.** Its
+  severity 1 and 3 differ by 0.5 8-bit levels out of 35 (against blur's
+  7.60 -> 21.87), because inpainting removes the object at every radius. A flat
+  remove-severity response is an ABSENT STIMULUS, not judge insensitivity, and
+  pooled into a by-severity table it reports our own design as a finding.
+  `stage4_analyze.FLAT_SEVERITY = {"remove"}` and `collapse_flat_severity()`
+  relabel it to a single `binary` condition inside `delta_table` and
+  `axis_table`, so no caller can forget. Nothing is dropped or pooled across
+  corruptions: `remove` keeps its own row in every per-corruption table and
+  appears as its own `binary` row in the by-severity ones, so reading down the
+  1 -> 3 column really is reading an effect-size ladder.
+  The rejected alternative was redefining severity for `remove` in
+  `corruptions.py` (e.g. alpha-blending the inpaint). Better science, but it
+  changes corruption bytes, so all five VMs re-run the determinism check and
+  any judged data is void -- too much for a ladder on the one corruption we
+  already know is the strongest stimulus.
 - **`REMOVE_TEMPLATES` in stage 0.** Still generates "remove the X"
   instructions, which collide with `remove` being a corruption, and make
   "how well is this region preserved" ill-posed for a region the instruction

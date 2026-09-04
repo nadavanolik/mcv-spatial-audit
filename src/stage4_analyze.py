@@ -44,6 +44,39 @@ READOUTS = ["reward", "phi", "sc_preserve", "sc_success"]
 
 BG = "bg"
 
+# Corruptions whose severity ladder is not a ladder, collapsed to one condition
+# before any groupby. `remove` inpaints the object away at every setting:
+# measured on real photographs (2026-08-26), severity 1 and 3 change the masked
+# pixels by 35.01 and 35.52 mean 8-bit levels - 0.5 apart, against blur's
+# 7.60 -> 21.87 over the same span. The object is gone either way; radius only
+# changes how the fill borrows neighbouring texture.
+#
+# This matters because a flat response across remove's severities is an ABSENT
+# STIMULUS, not judge insensitivity. Left in a by-severity table it reports our
+# own design as a finding about the judge.
+FLAT_SEVERITY = {"remove"}
+BINARY = "binary"
+
+
+def collapse_flat_severity(d: pd.DataFrame) -> pd.DataFrame:
+    """Fold FLAT_SEVERITY corruptions into a single severity label.
+
+    Nothing is dropped and nothing is pooled across corruptions: `remove` keeps
+    its own row in every per-corruption table, and appears in the by-severity
+    tables as its own `binary` row rather than contaminating 1 and 3. What goes
+    away is only the claim that its severity 1 and severity 3 are different
+    stimuli.
+
+    Severity becomes a string for every row, so the label sorts and groups
+    alongside the numeric levels. Nothing downstream does arithmetic on it.
+    """
+    if not {"severity", "corruption"} <= set(d.columns):
+        return d
+    d = d.copy()
+    d["severity"] = d.severity.astype(str)
+    d.loc[d.corruption.isin(FLAT_SEVERITY), "severity"] = BINARY
+    return d
+
 
 def load(pattern: str) -> pd.DataFrame:
     files = sorted(glob.glob(pattern))
@@ -181,7 +214,9 @@ def delta_table(df: pd.DataFrame, col: str) -> pd.DataFrame:
     out = agg[~agg.is_control].merge(ctrl, on=["judge", "base_id", "scored_region_id"])
     out["delta"] = out.score - out.ctrl_score
     out["is_target"] = out.scored_region_id == out.target_region_id
-    return out
+    # Here, not at the call sites: every severity groupby downstream reads this
+    # table, and one that forgot would silently produce the misleading version.
+    return collapse_flat_severity(out)
 
 
 def drop_floored(d: pd.DataFrame, thresh: float) -> pd.DataFrame:
@@ -288,6 +323,10 @@ def localization(d: pd.DataFrame) -> pd.DataFrame:
     the judge merely distinguishes foreground from background. It stays in the
     leakage matrix, where "damage in region i moved the background score" is a
     real thing to see.
+
+    Severity rows 1 and 3 pool every GRADED corruption. FLAT_SEVERITY ones get
+    their own `binary` row instead, so reading down the 1 -> 3 column really is
+    reading an effect-size ladder.
     """
     d = d[d.scored_region_id != BG]
     rows = []
@@ -373,6 +412,7 @@ def axis_table(df: pd.DataFrame) -> pd.DataFrame:
     d = df[(df.scored_region_id == df.target_region_id) & (df.scored_region_id != BG)]
     if d.empty:
         return pd.DataFrame()
+    d = collapse_flat_severity(d)
     return (d.groupby(["judge", "corruption", "severity"])
             [["sc_success", "sc_preserve", "phi", "reward"]]
             .mean().round(3).reset_index())
@@ -462,6 +502,10 @@ def main():
         print("  n/a")
 
     print("\n=== localization AUROC by severity ===")
+    print(f"  ({'/'.join(sorted(FLAT_SEVERITY))} has no severity ladder - its "
+          f"1 and 3 differ by 0.5 of 35 8-bit")
+    print(f"   levels - so it reports as one '{BINARY}' row rather than "
+          f"flattening 1 and 3.)")
     for c in cols:
         dc = d if c == a.col else delta_table(usable(df, c), c)
         if a.min_control is not None and c != a.col:

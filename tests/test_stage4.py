@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.stage4_analyze import (  # noqa: E402
     load, usable, noise_floor, delta_table, localization,
     localization_by_corruption, leakage_matrix, redundancy, axis_table,
+    BINARY, FLAT_SEVERITY,
 )
 
 # 20, not 6. The null AUROC for a judge with no spatial resolution is centred
@@ -179,9 +180,12 @@ def main() -> int:
     ok &= check("background excluded from AUROC",
                 "bg" not in set(d[d.scored_region_id == "bg"].scored_region_id)
                 or len(localization(d)) == len(loc))
+    # Graded severities only. `remove` reports as one BINARY row because its
+    # severity 1 and 3 are the same stimulus; including it here would compare
+    # an effect-size ladder against something that has none.
+    graded = loc[(loc.judge == "fixture/perfect") & (loc.severity != BINARY)]
     ok &= check("severity 3 localises at least as well as severity 1",
-                bool(loc[loc.judge == "fixture/perfect"]
-                     .sort_values("severity").auroc.is_monotonic_increasing
+                bool(graded.sort_values("severity").auroc.is_monotonic_increasing
                      or (a_perfect > 0.98).all()))
 
     print("\n" + "=" * 68)
@@ -221,11 +225,33 @@ def main() -> int:
     print(ax.to_string(index=False))
     dmg = ax[ax.corruption != "none"]
     ok &= check("preserve falls with severity",
-                dmg[dmg.severity == 3].sc_preserve.mean()
-                < dmg[dmg.severity == 1].sc_preserve.mean())
+                dmg[dmg.severity == "3"].sc_preserve.mean()
+                < dmg[dmg.severity == "1"].sc_preserve.mean())
     ok &= check("success does NOT fall with severity",
-                abs(dmg[dmg.severity == 3].sc_success.mean()
-                    - dmg[dmg.severity == 1].sc_success.mean()) < 1.0)
+                abs(dmg[dmg.severity == "3"].sc_success.mean()
+                    - dmg[dmg.severity == "1"].sc_success.mean()) < 1.0)
+
+    print("\n" + "=" * 68)
+    print("6b. FLAT-SEVERITY corruptions collapse to one condition")
+    print("=" * 68)
+    # `remove` inpaints the object away at every setting: on real photographs
+    # severity 1 and 3 changed the masked pixels by 35.01 vs 35.52 mean 8-bit
+    # levels. A flat response there is an ABSENT STIMULUS, not an insensitive
+    # judge, and pooling it into the severity ladder reports our own design as
+    # a finding.
+    ok &= check("remove reports as one binary condition",
+                set(d[d.corruption == "remove"].severity) == {BINARY},
+                f"{sorted(set(d[d.corruption == 'remove'].severity))}")
+    ok &= check("graded corruptions keep their ladder",
+                set(d[d.corruption == "blur"].severity) == {"1", "3"},
+                f"{sorted(set(d[d.corruption == 'blur'].severity))}")
+    ok &= check("no severity row is dropped by the collapse",
+                len(d) == len(delta_table(usable(df, "phi"), "phi")))
+    ok &= check("remove still gets its own by-corruption row",
+                "remove" in set(localization_by_corruption(d).corruption))
+    ok &= check("the binary row is separate, not merged into 1 or 3",
+                BINARY in set(localization(d).severity),
+                f"{sorted(set(localization(d).severity))}")
 
     print("\n" + "=" * 68)
     print("7. BY-CORRUPTION split runs and covers every corruption")
