@@ -24,11 +24,18 @@ pilot:
   # ~80 variants -> ~160 requests. Runs in minutes. Validates the judge.
 
 main:
-  n_bases: 100
+  # 150, not 100 (decided 2026-09-04). The extra 50 cost 2.7h on the editor VM
+  # and ~0.6h/VM in stage 3, and buy intervals ~18% tighter. They stop being
+  # free at ~200, where stage 1 no longer fits one night.
+  n_bases: 150
   corruptions: [none, blur, saturate, noise, jpeg, remove]
   severities: [1, 3]          # skip mid severity; keeps the effect-size ladder
   area_bins: [full]
-  # 4,400 variants -> ~17,600 requests -> ~3,520/VM -> ~1.2h/VM. On budget.
+  # 11 variants per region (1 control + 5 corruptions x 2 severities), 2
+  # requests each (SC + PQ). At 3.19 regions/base: ~5,300 variants ->
+  # ~10,500 requests -> ~2,100/VM -> ~1.7h/VM at greedy. On budget.
+  # regions/base is from val2017 BEFORE the uniqueness rule; stage 0 prints the
+  # real figure and these numbers scale linearly with it.
 
 full_cross:
   n_bases: 200

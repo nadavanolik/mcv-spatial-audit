@@ -133,7 +133,7 @@ both splits are equally public to the models involved.
 ```
 stage 0  COCO filter        CPU     once     -> data/bases/{regions,masks,source}
 stage 1  editing (FLUX)     GPU     once     -> data/bases/*/edit.png   [editor VM]
-         ---- tar + upload ~300MB to HF Hub. The only large transfer. ----
+         ---- tar + upload ~450MB to HF Hub. The only large transfer. ----
 build_manifest              CPU     once     -> out/manifest.parquet
 stage 2  corruption         CPU     per-VM   -> /dev/shm  (regenerated, never shipped)
 stage 3  judging (vLLM)     GPU     per-VM   -> out/scores_shard{k}.parquet
@@ -147,7 +147,7 @@ its output is an immutable artefact generated exactly once and described by
 `data/bases/stage1_provenance.json`.
 
 Measured on one A10: stage 1 **189s/image**, stage 3 **2.84s/request** at greedy
-decoding. The `main` profile is **~1.1h/VM** sharded five ways.
+decoding. The `main` profile is 150 bases: **~1.7h/VM** sharded five ways.
 
 ## Usage
 
@@ -155,7 +155,7 @@ decoding. The `main` profile is **~1.1h/VM** sharded five ways.
 # stages 0 + 1 — editor VM only, once
 python -m src.stage0_coco --coco data/coco/annotations/instances_train2017.json \
     --images data/coco/train2017 --out data/bases --n 150
-python -m src.stage1_edit --limit 100
+python -m src.stage1_edit --limit 150
 
 # everyone, once bases.tar.gz is distributed
 python -m src.build_manifest --profile pilot          # or main

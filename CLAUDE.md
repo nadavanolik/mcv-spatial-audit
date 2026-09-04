@@ -84,7 +84,7 @@ Consequences, all already reflected in the code:
 | Qwen3-VL accepts video | `limit_mm_per_prompt` **must** carry `"video": 0`. Left unset, vLLM sizes the encoder cache for a max-length video (151250 tokens) and OOMs in `profile_run` trying to allocate 4.62GiB on top of 16.8GiB of weights. |
 | 16.8GiB of weights on a 20.16GiB budget | Everything else has to fit in ~3.4GiB, so `load_engine` runs **eager** (no CUDA graphs), caps `max_num_batched_tokens=2048`, and `max_model_len=4096`. At 8192 + graphs the KV cache came out at **-0.40GiB**. |
 | **Qwen3-VL-8B bf16 barely fits** | At `--gpu-util 0.89` it starts, but the KV cache is **0.70GiB = 5,072 tokens, max concurrency 1.24x** — effectively serial. **This does NOT matter and a 4B judge does NOT fix it**: measured 2026-08-26, a 4B at 26.22x the concurrency finished 2% faster. Grammar decoding, not batching, set the pace. See "RESOLVED: throughput". |
-| No shared FS | Corrupted variants are **regenerated per-VM**, never transferred. Only ~300MB of base edits moves, once, via HF Hub. |
+| No shared FS | Corrupted variants are **regenerated per-VM**, never transferred. Only ~450MB of base edits moves, once, via HF Hub. |
 | No sudo | `opencv-python-headless` — the normal build needs `libGL.so.1` via apt. Never swap this. |
 | 90G disk | VMs are **role-specialised**: the editor VM holds the diffusion model, judge VMs hold judges. Never both. |
 | `/dev/shm` | Scratch for regenerated variants. Nothing large goes on `/`. |
@@ -258,7 +258,7 @@ from source" warning is retired.)
   This is VRAM, not disk — unloading a judge or clearing the cache changes
   nothing. `enable_sequential_cpu_offload` streams submodules and is now the
   default. Peak VRAM **2.39GiB of ~21GiB**.
-- **191.4s/image at 28 steps.** pilot (5) = 16 min, `main` (100) = 5.3h,
+- **191.4s/image at 28 steps.** pilot (5) = 16 min, `main` (150) = 8.0h,
   `full_cross` (200) = 10.6h. `main` fits an overnight run, so no quantization
   is needed. If it ever is, the lever is an NF4 transformer (~6GB, resident,
   removes the PCIe round trip that dominates), **not** fewer steps — the card
@@ -350,9 +350,11 @@ Two things this corrects:
 
 **SUPERSEDED by greedy decoding.** Those figures assume `n=5 @ T=0.7`. The
 pilot showed that config is unusable anyway (see PILOT VERDICT), and greedy
-(`--temperature 0 --n-samples 1`) measures **2.84 s/request** — `main` =
-7,018 requests = **1.1h/VM across five VMs**, inside the proposal's 1.2h
-estimate. Greedy fixed the measurement and the budget at once.
+(`--temperature 0 --n-samples 1`) measures **2.84 s/request** — `main` at the
+then-current 100 bases = 7,018 requests = **1.1h/VM across five VMs**, inside
+the proposal's 1.2h estimate. Greedy fixed the measurement and the budget at
+once. (`main` is 150 bases as of 2026-09-04: ~10,500 requests, ~1.7h/VM. The
+s/request measurement is unaffected.)
 
 **Per-stage notes (all four stages have now executed on real data; this
 section is history plus the residual risk in each):**
@@ -398,8 +400,8 @@ section is history plus the residual risk in each):**
   instructions, so an unusable image no longer advances the RNG stream.
   **Any change to this filter restales every `edit.png`** — `stage1_edit`
   fingerprints edits against a hash of their instruction, and shifting which
-  regions survive shifts every instruction. Cheap now (5 edits); 5.3h after the
-  100-base run.
+  regions survive shifts every instruction. Cheap now (5 edits); 8h after the
+  150-base run.
 - `stage1_edit.py` — **`--preflight` now settles most of it without a
   download.** It checks the `FluxKontextPipeline` class name, its `__call__`
   signature, the offload API, HF auth, gated-repo access, disk, and the stage-0
@@ -632,9 +634,9 @@ and one that reacts at random.
 
 ### Greedy also fixed the budget
 
-2.84 s/request measured. `main` = 7,018 requests, **1.1h/VM across five VMs**,
-inside the proposal's 1.2h estimate (it was 3.1h at n=5). `main` also lifts
-n_target per cell from 15 to 319, a **21x** power increase.
+2.84 s/request measured. `main` at 150 bases = ~10,500 requests,
+**~1.7h/VM across five VMs**, inside the proposal's budget (n=5 would be ~4.7h).
+`main` also lifts n_target per cell from 15 to ~479, a **32x** power increase.
 
 **Worth reporting separately:** at temperature 0.7 the same judge's score varied
 across samples of an IDENTICAL input by 38% of the scale (SD 0.363 on a 0.959
@@ -653,7 +655,7 @@ the harness.
   temperature 0.7`, which is what produced an unreadable pilot: the judge's
   score varied across samples of an identical input by 38% of the scale, and
   the floor swamped every effect. Greedy (`--temperature 0 --n-samples 1`) is
-  what made the result legible AND cut `main` from 3.1h to 1.1h/VM. The
+  what made the result legible AND cut `main` roughly threefold. The
   argument against is that greedy gives no noise-floor estimate, so the answer
   is probably greedy for the main run plus a small `n=5 @ T=0.7` run on ~10
   bases purely to characterise the instability. Nobody has decided.
@@ -689,19 +691,23 @@ the harness.
    rate (`sensitivity`), because 53-80% of damaged regions do not move at all
    and an axis mean cannot show that.
 4. Cross-VM determinism hash from the two VMs that have not reported it.
-5. `main`: **~1.1h/VM** at greedy, sharded five ways (3.1h at n=5).
+5. `main`: 150 bases, **~1.7h/VM** at greedy, sharded five ways.
 
-**Base count is open (raised 2026-09-03).** No longer pool-limited now that
-train2017 supplies ~1,090. 100 vs 150 costs 2.7 extra hours on
-the editor VM (5.3h -> 8.0h, serial, blocking) and nothing anywhere else —
-stage 3 goes 1.1 -> 1.7h/VM, disk is a rounding error. What it buys is modest
-and worth stating honestly: regions within an image are NOT independent (that
-is the finding — coherence 27%, redundancy R^2 0.52-0.56), so effective n is
-the photograph count, and 100 -> 150 narrows intervals by 1/sqrt(1.5), ~18%.
-It crosses no threshold: the tie rate is already comfortable at 100, and AUROC
-is not resolvable at either. Decide it after the survey, not before —
-uniqueness may put 150 out of reach anyway. `stage1_edit` resumes from
-`edit_state`, so topping up later costs nothing.
+**Base count DECIDED 2026-09-04: `main` is 150 bases.** `config.yaml` says so.
+Not pool-limited — train2017 supplies ~1,090. The 50 over 100 cost 2.7 extra
+hours on the editor VM (5.3h -> 8.0h, serial, blocking) and nothing anywhere
+else: stage 3 goes 1.1 -> 1.7h/VM, disk is a rounding error.
+
+State the gain honestly in the report rather than overselling it: regions
+within an image are NOT independent (that is the finding — coherence 27%,
+redundancy R^2 0.52-0.56), so effective n is the photograph count, and
+100 -> 150 narrows intervals by 1/sqrt(1.5), ~18%. It crosses no threshold —
+the tie rate was already comfortable at 100 and AUROC is not resolvable at
+either. It is cheap insurance, not a new claim.
+
+Do not push to 200 without re-timing: stage 1 stops fitting one night, and it
+is the serial stage everything else waits on. If more power is ever wanted,
+more PHOTOGRAPHS is the lever, never more regions per photograph.
 
 **Do not re-litigate** (each was measured, not argued):
 - `--gpu-util` 0.89; the window is (0.861, 0.901) and both ends fail.
@@ -781,8 +787,8 @@ the pilot; stage 4 has seen real 5-base data.)
 ## Guardrails
 
 - Don't run the `full_cross` profile casually: 24,800 variants → 99,200 requests.
-  `main` at 100 bases x 3.19 regions is ~3,500 variants / 7,018 requests,
-  **~1.1h/VM at greedy**, sized to the proposal's stated budget.
+  `main` at 150 bases x 3.19 regions is ~5,300 variants / ~10,500 requests,
+  **~1.7h/VM at greedy**, sized to the proposal's stated budget.
 - Don't add dependencies needing apt/sudo.
 - Don't write variants, weights, or datasets to `/` beyond the budget in README.
 - Don't commit HF tokens, `data/`, or `out/` (see `.gitignore`).

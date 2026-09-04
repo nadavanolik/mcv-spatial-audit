@@ -1,6 +1,6 @@
 # Team brief
 
-Updated 2026-08-26. Start here — this is the plain-language version.
+Updated 2026-09-04. Start here — this is the plain-language version.
 Setup commands, repo structure and constraints live in [`README.md`](README.md).
 
 ---
@@ -33,7 +33,7 @@ assumption four papers rest on, or we find a hole in it.
 **Why the pipeline looks the way it does.** Our five VMs can't share files and
 have small disks, so we can't pass gigabytes of damaged images around. But
 damaging a region is *deterministic* — same image, same mask, same seed, same
-bytes out. So each VM regenerates only its own share locally. Only ~300MB of
+bytes out. So each VM regenerates only its own share locally. Only ~450MB of
 edited images ever moves between machines, once, at the start.
 
 That only works if every machine produces **byte-identical** damage. Hence the
@@ -74,8 +74,8 @@ copied into each region slot** — exactly the failure we set out to look for.
 ### The honest caveat
 
 **This is five photographs.** It's internally consistent and it looks
-convincing, but five images is a pilot, not a result. The full run uses 100
-images and gives ~21× the data. Nobody should quote these numbers as final.
+convincing, but five images is a pilot, not a result. The full run uses 150
+images and gives ~32× the data. Nobody should quote these numbers as final.
 
 ---
 
@@ -118,7 +118,7 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 
 | Role | Where it stands | Next |
 |---|---|---|
-| **Editor VM** | stages 0+1 working, 5 images edited | Re-run the image survey first (decision 4), then edit the agreed number (~3 min each), `tar czf bases.tar.gz -C data bases` and upload. **Everyone else is waiting on this.** |
+| **Editor VM** | stages 0+1 working, 5 images edited (now superseded) | Fetch the 150 photos, run stage 0, edit all 150 (~3 min each, one overnight run), then `tar czf bases.tar.gz -C data bases` and upload. **Everyone else is waiting on this.** |
 | **Judge harness** | working, 100% parse, real published prompt | Decide the sampling config — decision 1 below |
 | **Corruption + manifest** | determinism confirmed on 3 of 5 VMs | Chase the other two. Own `config.yaml` |
 | **Analysis** | stage 4 runs on real data | Start the figures. The tie-rate and coherence tables are the headline ones, not AUROC |
@@ -143,23 +143,22 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
    being one of our damage types, and "was this region preserved?" is
    meaningless for a region we told the editor to delete.
 
-4. **How many photographs.** We were going to use 100. The cost of 150 is
-   2.7 extra hours on the editor VM overnight and nothing anywhere else, so
-   it's cheap — but it only tightens our error bars by about a fifth, because
-   the regions inside one photo don't count as separate samples. That's our
-   own finding: the judge treats a photo as one thing.
+## Settled since the last brief
 
-   We also tightened which photos qualify: each object we edit must appear
-   exactly **once** in the picture. Otherwise "make the car red" is ambiguous
-   when there are three cars, and neither the editor nor the judge can know
-   which one we meant — avoidable noise we were creating ourselves.
+**Each object we edit must now appear exactly once in the photo.** Otherwise
+"make the car red" is ambiguous when there are three cars, and neither the
+editor nor the judge can know which one we meant — avoidable noise we were
+creating ourselves.
 
-   That rule threw away three quarters of our photos, so we switched from
-   COCO's small split to its large one: 46 usable photos became roughly 1,090.
-   We download only the couple of hundred we actually use, not the 18GB set.
-   So the photo count is now our choice rather than a limit — **pick a number
-   before any editing starts.** Changing this filter changes every instruction,
-   which invalidates any images already edited.
+That rule threw away three quarters of our photos, so we switched from COCO's
+small split to its large one: 46 usable photos became roughly 1,090. We
+download only the couple of hundred we actually use, not the 18GB set.
+
+**We're using 150 photographs, not 100.** The extra 50 cost one longer
+overnight run on the editor VM and nothing anywhere else. Be straight about
+what they buy, though: our error bars tighten by about a fifth, no more,
+because the regions inside one photo don't count as separate samples. That's
+our own finding — the judge treats a photo as one thing.
 
 ## Two things that must reach the report
 
@@ -201,7 +200,7 @@ caught it.
 ## Timeline to 30.9
 
 - **Week 1 — done.** Setup, pipeline verified, pilot, go/no-go. Verdict GO.
-- **Week 2** — 100 images edited and shipped; manifest frozen; main run.
+- **Week 2** — 150 images edited and shipped; manifest frozen; main run.
 - **Week 3** — second judge family; nuisance + exploitability tests.
 - **Week 4** — figures, LaTeX, repo cleanup.
 - **Week 5** — buffer and the 5-minute talk. Don't plan work here.
