@@ -246,11 +246,16 @@ def preflight(root: Path, model_id: str, a) -> int:
         if extra:
             print(f"  note __call__ also accepts {extra} - Kontext may resize "
                   f"internally; we resize the output back to source size.")
-        if not hasattr(FluxKontextPipeline, "enable_model_cpu_offload"):
-            problems.append("no enable_model_cpu_offload")
-            print("  FAIL no enable_model_cpu_offload")
+        # Check the API this run will actually call. Checking only
+        # enable_model_cpu_offload leaves the default mode -- sequential, the
+        # only one that fits -- unverified, so a missing or renamed sequential
+        # offload would surface after the 34GB download instead of before it.
+        api = f"enable_{a.offload}_cpu_offload"
+        if not hasattr(FluxKontextPipeline, api):
+            problems.append(f"no {api}")
+            print(f"  FAIL no {api} (--offload {a.offload})")
         else:
-            print("  OK   enable_model_cpu_offload present")
+            print(f"  OK   {api} present")
         print(f"  note vae slicing will use: "
               f"{'pipe.enable_vae_slicing()' if hasattr(FluxKontextPipeline, 'enable_vae_slicing') else 'pipe.vae.enable_slicing()'}")
     except ImportError as e:
@@ -430,10 +435,13 @@ def preflight(root: Path, model_id: str, a) -> int:
             print(f"    instruction: {s0['instruction']}")
             print(f"    regions:     {len(s0['regions'])}")
             if max(im.size) > a.max_side:
+                # Not an alignment risk: the edit is resized back to the source
+                # size before it is saved, so stage 0's masks still index it
+                # correctly. What a low --max-side costs is detail.
                 print(f"    note source exceeds --max-side {a.max_side}; it "
-                      f"will be thumbnailed, and masks from stage 0 are at "
-                      f"SOURCE resolution. Keep --max-side >= the largest "
-                      f"source or stage 2 will misalign.")
+                      f"will be edited smaller and resized back to "
+                      f"{im.size[0]}x{im.size[1]}, so masks stay aligned but "
+                      f"fine detail is lost.")
 
     print("\n--- would run ---")
     print(f"  model={model_id} dtype=bfloat16 offload={a.offload}")
@@ -509,6 +517,19 @@ def main():
 
     pipe = load_editor(a.model, offload=a.offload)
 
+    # Written BEFORE the loop and refreshed after every image. 150 bases at
+    # ~191s is an eight-hour run, and writing this only at the end meant any
+    # interrupt left the artefact with no provenance at all - which is the
+    # whole reproducibility claim for a stage that cannot be re-derived from a
+    # seed. n_edited counts THIS run, not the directory: a resumed run edits
+    # only what was missing or stale.
+    prov_path = root / "stage1_provenance.json"
+    prov = provenance(a.model, a)
+    prov["n_bases"] = len(specs)
+    prov["n_todo"] = len(todo)
+    prov["n_edited"] = 0
+    prov_path.write_text(json.dumps(prov, indent=2))
+
     t0, n = time.time(), 0
     for s in tqdm(todo, desc="editing"):
         d = root / s["base_id"]
@@ -516,7 +537,6 @@ def main():
         before = src.size
         src.thumbnail((a.max_side, a.max_side), Image.LANCZOS)
 
-        import torch
         out = pipe(
             image=src,
             prompt=s["instruction"],
@@ -543,16 +563,15 @@ def main():
             "model": a.model, "steps": a.steps, "guidance": a.guidance,
         }, indent=2))
         n += 1
+        prov["n_edited"] = n
+        prov_path.write_text(json.dumps(prov, indent=2))
         gc.collect()
         torch.cuda.empty_cache()
 
     dt = time.time() - t0
     print(f"edited {n} images in {dt / 60:.1f} min ({dt / max(n, 1):.1f}s each)")
 
-    prov = provenance(a.model, a)
-    prov["n_edited"] = n
-    (root / "stage1_provenance.json").write_text(json.dumps(prov, indent=2))
-    print(f"provenance -> {root / 'stage1_provenance.json'}")
+    print(f"provenance -> {prov_path}")
     print("done - now tar data/bases and upload once")
 
 
