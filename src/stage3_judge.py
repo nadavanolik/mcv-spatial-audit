@@ -309,6 +309,20 @@ def _structured_kwargs(kind: str, schema: dict) -> dict:
     return {"guided_decoding": GuidedDecodingParams(json=schema)}
 
 
+def sampling_base(n_samples: int, temperature: float) -> dict:
+    """The sampling params, in ONE place.
+
+    dry_run used to restate these as a print-format string, so every change
+    here needed a second edit there and never got one: max_tokens went
+    32 -> 1024 -> 1536 while the dry run went on explaining a 1024 cap, and
+    repetition_penalty went 1.05 -> 1.1 while both the dry run and the comment
+    below still named 1.05. Returning a dict that both callers read makes that
+    function's "mirrors run() rather than restating it" claim true.
+    """
+    return dict(n=n_samples, temperature=temperature, top_p=0.95,
+                max_tokens=1536, repetition_penalty=1.1, seed=1234)
+
+
 def run(llm, msgs, meta, n_samples: int, temperature: float,
         structured: bool = True, reasoning: str = "free") -> pd.DataFrame:
     from vllm import SamplingParams
@@ -327,15 +341,14 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
     # as nothing. That was the ENTIRE 30% parse failure. Free-running reasoning
     # inside a JSON field at temperature 0.7 is exactly the setup that invites
     # it: nothing in the grammar pushes toward closing the string.
-    # 1.05 is mild -- enough to break a verbatim loop, small enough that it
-    # does not distort the score tokens, which are what we actually measure.
+    # 1.1, raised from 1.05 when 1.05 did not hold the loop. Still mild enough
+    # not to distort the score tokens, which are what we actually measure.
     #
     # max_tokens 1024 -> 1536: a 5-region response with per-region reasoning
     # legitimately runs long, and truncation costs the whole response. The
     # ceiling is max_model_len 4096 minus a ~1,750-token prompt, so 1536 still
     # leaves headroom.
-    base = dict(n=n_samples, temperature=temperature, top_p=0.95,
-                max_tokens=1536, repetition_penalty=1.1, seed=1234)
+    base = sampling_base(n_samples, temperature)
 
     kind = structured_kind() if structured else None
     if kind:
@@ -493,10 +506,10 @@ def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
     # memory. The point of a dry run is to show what WOULD happen, so a stale
     # number here is worse than no number at all.
     print("\n--- sampling params that would be used (not constructed) ---")
-    print(f"  n={a.n_samples} temperature={a.temperature} top_p=0.95 "
-          f"max_tokens=1536 repetition_penalty=1.05 seed=1234")
-    print("  (max_tokens is 1024 because A.4.3 asks for per-region reasoning "
-          "text before the scores.)")
+    sp = sampling_base(a.n_samples, a.temperature)
+    print("  " + " ".join(f"{k}={v}" for k, v in sp.items()))
+    print(f"  (max_tokens is {sp['max_tokens']}, not 32: A.4.3 asks for "
+          f"per-region reasoning text before the scores.)")
     print("\n--- engine that would be loaded (not loaded) ---")
     print(f"  model={a.model} dtype=bfloat16 "
           f"max_model_len={a.max_model_len} "
