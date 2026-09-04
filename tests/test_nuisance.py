@@ -285,6 +285,127 @@ def test_build_requests_under_every_presentation():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# --- scripts/nuisance_report.py, against judges with known behaviour ---------
+
+def _fake_scores(nuisance: float, pq_baseline=20.0, pq_enhance=25.0,
+                 damage=2.0, jitter=0.0, n_samples=1, presentations=None):
+    """Score rows in stage 3's exact output schema, for a judge whose response
+    to each presentation we choose.
+
+    `nuisance` is how much a shuffled region list moves every score. 0 is a
+    judge that only reacts to content; a large value is one whose per-region
+    number is partly about word order. `damage` is how far the targeted
+    region's score falls when we actually corrupt it -- the thing the nuisance
+    is measured against.
+    """
+    import pandas as pd
+    presentations = presentations or ["baseline", "shuffle", "enhance"]
+    rng = np.random.default_rng(0)
+    rows = []
+    for b in range(3):
+        bid = "b%d" % b
+        for target in IDS:
+            for corr, sev, ctrl in (("none", 0, True), ("blur", 1, False)):
+                vid = variant_id(bid, target, corr, sev, "full")
+                for pres in presentations:
+                    pq = pq_enhance if pres == "enhance" else pq_baseline
+                    for s in range(n_samples):
+                        for slot, rid in enumerate(IDS + ["bg"]):
+                            phi = 20.0
+                            if not ctrl and str(rid) == str(target):
+                                phi -= damage
+                            if pres == "shuffle":
+                                phi += nuisance
+                            phi += rng.normal(0, jitter) if jitter else 0.0
+                            rows.append(dict(
+                                variant_id=vid, base_id=bid,
+                                target_region_id=str(target), corruption=corr,
+                                severity=sev, area_bin="full", is_control=ctrl,
+                                presentation=pres, n_shown=len(IDS),
+                                sample_idx=s, scored_region_id=str(rid),
+                                slot_idx=-1 if rid == "bg" else slot,
+                                sc_success=phi, sc_preserve=phi,
+                                sc_background=phi, sc_overall_success=phi,
+                                sc_overall_preserve=phi,
+                                pq_naturalness=pq, pq_artifacts=pq,
+                                reward=(phi * pq) ** 0.5 / 25.0, parsed=True,
+                                finish_reason="stop", n_tokens=200, raw="{}",
+                                judge="fake/judge"))
+    return pd.DataFrame(rows)
+
+
+def _run_report(tmp: Path, nuisance: float) -> dict:
+    import subprocess
+    import pandas as pd
+    nd = tmp / "nuisance"
+    nd.mkdir(parents=True, exist_ok=True)
+    df = _fake_scores(nuisance)
+    for pres, g in df.groupby("presentation"):
+        g.to_parquet(nd / ("scores_%s.parquet" % pres))
+    # the floor run: baseline packaging, repeated samples, real spread
+    _fake_scores(nuisance, jitter=0.4, n_samples=3,
+                 presentations=["baseline"]).to_parquet(nd / "floor_baseline.parquet")
+
+    out = tmp / "report"
+    r = subprocess.run(
+        [sys.executable, "-m", "scripts.nuisance_report",
+         "--scores", str(nd / "scores_*.parquet"),
+         "--sampled", str(nd / "floor_*.parquet"), "--out", str(out)],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        capture_output=True, text=True)
+    assert r.returncode == 0, (r.stdout[-2500:], r.stderr[-2500:])
+    assert r.stdout.isascii(), "non-ASCII output (the Windows console is not UTF-8)"
+    return {p.stem: pd.read_csv(p) for p in out.glob("*.csv")}
+
+
+def test_report_clears_a_nuisance_immune_judge():
+    """A judge that ignores the packaging must show a nuisance effect of
+    exactly zero. If this fails, every positive result the report can produce
+    is suspect."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        csv = _run_report(tmp, nuisance=0.0)
+        sh = csv["nuisance"].set_index("presentation").loc["shuffle"]
+        assert sh.mean_abs_delta == 0.0, sh.mean_abs_delta
+        assert sh.unchanged == 1.0, sh.unchanged
+        assert csv["damage_reference"].target_unchanged.max() == 0.0, \
+            "the damage reference says nothing moved; the fixture is broken"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_report_catches_a_nuisance_sensitive_judge():
+    """A judge whose score follows word order must come back with vs_damage
+    above 1: a change touching no pixel moved it more than real damage did."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        csv = _run_report(tmp, nuisance=3.0)
+        sh = csv["nuisance"].set_index("presentation").loc["shuffle"]
+        assert sh.mean_abs_delta > 0
+        assert sh.vs_damage > 1.0, sh.vs_damage
+        assert sh.kind == "text", sh.kind
+        assert sh.vs_floor > 0 and sh.vs_floor == sh.vs_floor, \
+            "no noise floor: the sampled run was not read"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_report_catches_the_aes_exploit():
+    """Raising PQ alone must raise `reward` for every region while leaving
+    `phi` flat -- Equation (3)'s image-level AES factor, which is the whole
+    exploitability hypothesis."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        csv = _run_report(tmp, nuisance=0.0)
+        ex = csv["exploitability"].set_index(["presentation", "readout"])
+        assert ex.loc[("enhance", "reward"), "mean_gain"] > 0
+        assert ex.loc[("enhance", "reward"), "frac_rose"] == 1.0
+        assert abs(ex.loc[("enhance", "phi"), "mean_gain"]) < 1e-9, \
+            "phi moved; the fixture changed more than PQ"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 TESTS = [test_shuffle_is_a_permutation, test_shuffle_is_deterministic,
          test_shuffle_varies_across_variants,
          test_subset_keeps_the_target_and_drops_one,
@@ -294,7 +415,10 @@ TESTS = [test_shuffle_is_a_permutation, test_shuffle_is_deterministic,
          test_enhance_is_deterministic_and_changes_pixels, test_enhance_is_global,
          test_draw_boxes_marks_only_the_presented_regions,
          test_reward_rises_with_pq_at_fixed_phi,
-         test_build_requests_under_every_presentation]
+         test_build_requests_under_every_presentation,
+         test_report_clears_a_nuisance_immune_judge,
+         test_report_catches_a_nuisance_sensitive_judge,
+         test_report_catches_the_aes_exploit]
 
 
 def main() -> int:
