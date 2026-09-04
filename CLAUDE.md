@@ -163,6 +163,7 @@ Consequences, all already reflected in the code:
 src/schema.py           manifest schema, variant_id, seed derivation, hash sharding
 src/corruptions.py      5 seeded feathered degradations (determinism-critical)
 src/judge_prompt.py     A.4.3 prompt verbatim, JSON schemas, Eq. (3) reward
+src/presentation.py     6 nuisance/exploitability packaging axes, applied in RAM
 src/stage0_coco.py      COCO instance-seg filter -> multi-region base specs
 src/stage1_edit.py      FLUX Kontext editing, sequential offload  [EDITOR VM ONLY]
 src/build_manifest.py   expand base specs into the design matrix
@@ -176,11 +177,14 @@ scripts/smoke_edit.py   one real FLUX edit on a synthetic image  [EDITOR VM ONLY
 scripts/diagnose_parse.py   why judge responses failed, from a scores parquet [CPU]
 scripts/verify_corruption.py  did the corruption damage the image, and only
                         inside the mask? [CPU] -- run before any insensitivity claim
+scripts/nuisance_report.py  paired-delta analysis across presentations [CPU]
 scripts/run_shard.sh    one VM's share of stages 2+3
 scripts/verify_determinism.sh   cross-VM hash check
 tests/test_determinism.py   5 determinism properties
 tests/test_stage0.py        selection logic via a stub COCO (no pycocotools)
 tests/test_stage4.py        3 synthetic judges with known behaviour + floor filter
+tests/test_nuisance.py      presentation axes + 3 judges with known nuisance
+                        behaviour; also builds the fixture --dry-run needs
 tests/test_syntax.py        every file parses; GPU modules import without torch
 config.yaml             pilot / main / full_cross profiles
 
@@ -701,6 +705,164 @@ range). A reward model that unstable is a problem for RL training regardless of
 whether it localises. Consider a small n=5 @ T=0.7 run on ~10 bases purely to
 characterise it.
 
+## Nuisance and exploitability — implemented 2026-09-04, not yet run on a GPU
+
+The last two of the four promised analyses. Both ask what the score does when
+something changes that carries **no information about edit quality**.
+
+### Presentation is a stage-3 flag, never a manifest column
+
+`variant_id` is `sha1(base_id|target_region_id|corruption|severity|area_bin)`
+(`schema.py:66-70`). A sixth field changes every id, hence every `seed_for()`,
+hence every rendered byte — voiding `776feeddd281fa726195bf504c7b19c8`, which
+three VMs have now confirmed. So `--presentation` re-packages the SAME images at
+request-build time. Any pixel change happens in memory in `build_requests` and
+is never written to disk. No manifest change, no re-render, less code.
+
+For the same reason nothing was added to `corruptions.py`:
+`verify_determinism.sh` hashes exactly the five ops named in its own list, so
+*adding* a function there is safe but *editing* one is not. `presentation.py` is
+a separate module and cannot touch that hash at all.
+
+### The six axes
+
+`baseline` is the identity — byte-identical messages to what stage 3 built
+before this existed.
+
+| axis | changes | role |
+|---|---|---|
+| `shuffle` | region list order in the prompt **and** the grammar's slots | nuisance, pure text |
+| `subset` | drops exactly one non-target region | nuisance, pure text |
+| `box` | bboxes drawn on **both** images | nuisance, visual |
+| `noimg` | every image stripped | exploitability |
+| `enhance` | global unsharp + contrast + saturation on the edit only | exploitability |
+
+Two orthogonal groupings, and the distinction matters: TEXT/IMAGE is about the
+**stimulus** (does a pixel change?), NUISANCE/EXPLOIT is about the **claim** (a
+nuisance axis is one where movement is the finding; an exploit axis is one where
+movement is the hypothesis). Reporting `enhance` under "does a null change move
+the score" is a category error, and the first version of the report did it.
+
+Design notes that are not obvious:
+- **`shuffle` must permute the schema too.** `_build_sc_schema` fills
+  `prefixItems` positionally from the id list (`judge_prompt.py:233`), so the
+  grammar pins slot k to `ids[k]`. Permuting the prompt but not the schema
+  would force the model back into canonical order — an axis that runs, costs
+  GPU time and measures nothing. `test_schema_slots_follow_the_presented_order`
+  exists solely to catch that.
+- **Order and drop-choice come from `sha256(variant_id|mode|region_id)` sorts,
+  not `random.Random`.** No RNG means no dependence on the interpreter's random
+  implementation. ~1/n! of `shuffle` variants draw the identity permutation;
+  that is the honest null, not a bug.
+- **`box` draws on both images.** On the edit alone the box would itself be a
+  difference from the source and could read as an editing artifact.
+- **`enhance` touches the edit only.** The source is the real photograph; the
+  exploit scenario is an RL editor learning to emit sharpened output.
+- **Expect `enhance` to raise `reward` while possibly LOWERING `phi`.**
+  Sharpening the edit makes it differ more from the source and the SC prompt
+  asks about preservation. Eq. (3) is `sqrt(phi * AES)/C` with `AES = min(PQ)` a
+  single image-level factor, so a cosmetic lift can raise every region's reward
+  with no edit improved. Those two moving in opposite directions is the result,
+  not a contradiction — read `reward` and `phi` side by side, never collapsed.
+- **`judge_prompt.py` needed no changes.** `build_sc_prompt` and
+  `sc_json_schema` already accepted arbitrary region lists in arbitrary order.
+
+### The analysis is in `scripts/`, and that is not just about merge conflicts
+
+**The delta is a different delta.** `stage4_analyze.delta_table` compares a
+CORRUPTED variant against its CLEAN control. Here the image is fixed and the
+packaging changes, so the pairing key is `(judge, variant_id,
+scored_region_id)` across presentations.
+
+Worse than answering the wrong question: `delta_table` does not group by
+`presentation`, so a glob catching several conditions **pools every condition's
+clean controls into one baseline, silently**. Same hole in `redundancy` and
+`leakage_matrix`. Hence `out/nuisance/`, whose filenames cannot match
+`out/scores_shard*.parquet`. If stage 4 ever grows a `presentation` groupby,
+this separation can relax; until then do not point stage 4 at these files.
+
+`nuisance_report.py` imports `delta_table`, `sensitivity`, `noise_floor`,
+`usable` and `load` from stage 4 rather than re-deriving them, so the tables read
+in the same vocabulary — same tie rate, same floor, same |delta|.
+
+**`scores_*.parquet` vs `floor_*.parquet` is load-bearing naming.** The floor
+run also carries `presentation == "baseline"`: same variants, same regions, same
+label. It is indistinguishable from the greedy baseline by any column, so
+detecting it programmatically does not work (both share a groupby key). Two
+globs, two filename prefixes, no detection logic to get wrong.
+
+### The sampling tension, and how it resolves
+
+Nuisance needs **greedy** to be attributable — at T=0.7 you cannot tell "the
+score moved because I shuffled the list" from "the judge is stochastic". But
+greedy destroys the **denominator**: `noise_floor` is the SD across repeated
+samples, and at n=1 it is NaN.
+
+Resolution: run every condition greedy, and take the floor from one sampled
+baseline run **over the identical variants** — not a separately chosen slice, or
+the floor and the deltas are over different images. That sampled run is the
+degenerate nuisance axis, the case where nothing changed at all, so it is the
+natural baseline for every presentation delta. **It is not an optional report
+extra; it is the denominator this analysis needs.**
+
+### Sizing, and the one-VM constraint
+
+Run on `--profile pilot` (5 bases), **not `--limit`**: `stage3_judge` does
+`df.head(limit)` after sharding and the manifest is ordered base -> region ->
+control -> corruptions, so a row limit can take a base's controls and drop its
+corrupted rows. The profile route also makes the sweep a strict subset of
+`main`: `build_manifest.py:22` slices `bases.json[:n_bases]`, and pilot's
+corruption/severity/area sets are subsets of main's, so **every pilot
+`variant_id` is also a main `variant_id`**.
+
+~75 variants -> 150 requests per condition. Seven runs (six greedy + one
+sampled) is ~1h plus ~20 min of repeated engine startup. On `main` the same
+sweep would be ~20x that — don't.
+
+**Run the whole sweep on ONE VM.** Cross-VM byte-equality of `enhance` and `box`
+is unverified (PIL, not covered by the fixture hash) and staying on one machine
+makes the question moot. Do not shard these.
+
+The sweep is **self-contained**: pilot is `[none, blur, remove]`, so
+`scores_baseline.parquet` holds clean controls AND damaged variants. Real-damage
+deltas and nuisance deltas both come out of it; nothing from the main run is
+needed, and it need not use the same photographs as an earlier pilot.
+
+### Verified vs unproven
+
+**Verified on the laptop, 2026-09-04** (`tests/test_nuisance.py`, 16 checks):
+- The grammar follows the shuffled prompt order.
+- All six axes build every request end to end on a synthetic 3-base fixture,
+  with region ids parsed back **out of the prompt text** and checked against
+  meta. `shuffle` 12/18 non-canonical, `subset` 18/18 with the target retained.
+- `noimg` emits zero image parts in both the SC and the PQ request.
+- `enhance` reaches both requests (PQ is where AES comes from), leaves the
+  source byte-identical, is deterministic, size-preserving and global.
+- Eq. (3): doubling PQ at fixed phi multiplies every region's reward by exactly
+  root 2.
+- `nuisance_report` on three fabricated judges: a nuisance-immune one reports
+  exactly 0, a nuisance-sensitive one reports `vs_damage > 1`, and an AES
+  exploit raises `reward` while `phi` stays flat.
+
+**Unproven — only a judge VM can settle these:**
+- Whether vLLM/xgrammar accepts a permuted `prefixItems` schema at all. This is
+  the one thing that could still invalidate the `shuffle` axis.
+- Grammar compile cost when `shuffle` turns one schema per base into up to n!.
+  `_sc_schema_cached` is `lru_cache(maxsize=64)` (`judge_prompt.py:197`); fine
+  at 5 bases, a thrash hazard at `main` scale.
+- Cross-VM equality of `enhance`/`box`. Deliberately untested; see above.
+- Every actual score.
+
+### Incidental: `dry_run` no longer restates `run()`
+
+`dry_run` printed `repetition_penalty=1.05` (the code has used 1.1 since
+760707a) and "max_tokens is 1024" beside a printed 1536 (`32 -> 1024` in
+38f2072, `-> 1536` in 4756cc5). Root cause was not carelessness: it hand-copied
+`run()`'s sampling dict as a **string literal**, so every change needed a second
+edit elsewhere and never got one. Both now read `sampling_base()`. Its own
+comment claimed it "mirrors run() rather than restating them from memory" — that
+is now true.
+
 ## Session close-out, 2026-08-26
 
 The pipeline runs end to end on real data. What remains is the experiment, not
@@ -708,14 +870,43 @@ the harness.
 
 **DECIDE FIRST (deferred 2026-08-26, not handled):**
 
-- **Make greedy the default in `run_shard.sh`?** It still runs `n=5 @
-  temperature 0.7`, which is what produced an unreadable pilot: the judge's
-  score varied across samples of an identical input by 38% of the scale, and
-  the floor swamped every effect. Greedy (`--temperature 0 --n-samples 1`) is
-  what made the result legible AND cut `main` roughly threefold. The
-  argument against is that greedy gives no noise-floor estimate, so the answer
-  is probably greedy for the main run plus a small `n=5 @ T=0.7` run on ~10
-  bases purely to characterise the instability. Nobody has decided.
+- ~~**Make greedy the default in `run_shard.sh`?**~~ **DECIDED 2026-09-04:
+  greedy everywhere, in both places, plus one deliberate sampled run.**
+
+  `n=5 @ T=0.7` was not an arbitrary default. `git log -L` on that line shows
+  it bought two things: the **noise floor** (`stage4.noise_floor` is the SD
+  across repeated samples of one input, and there is no other route to it), and
+  the **expected-score readout**, which needed `logprobs=20` over several
+  samples. Reason two is dead — logprobs are gone and
+  `expected_score_from_logprobs` raises. Reason one is still real, and that is
+  the point: **n=5 is a measuring instrument, not a production setting**, and
+  it had been left switched on for the main run.
+
+  What changed:
+  - `stage3_judge.py` defaults are now `--n-samples 1 --temperature 0`.
+  - `run_shard.sh` passes both **explicitly**. It previously passed neither, so
+    whatever the module happened to default to silently became the main run's
+    configuration. Stating it in the script means changing the module default
+    can never again change the main run without someone noticing.
+  - **Deliberately not overridable by an environment variable.** Sampling must
+    match across all five VMs for the shards to be comparable, exactly like
+    `--gpu-util`; a per-VM override is a way to break that quietly. `TEMP` as a
+    variable name is also a collision with the conventional temp-directory
+    variable. And `run_shard.sh` hardcodes `--out out/scores_shard${SHARD}`, so
+    it is the wrong vehicle for a floor run regardless — that run has its own
+    `--out`.
+  - The greedy default creates a NEW footgun, so `main()` guards it: asking for
+    `--n-samples 5` without also raising the temperature returns 5 **identical**
+    samples (greedy is deterministic at a fixed seed), costs 5x, and measures no
+    floor. Stage 4 reports a zero floor honestly, but by then the GPU time is
+    gone, so the warning fires before the engine loads.
+  - Scores parquets now carry `n_samples` and `temperature` columns. `judge`
+    was already recorded; sampling moves the numbers further than the choice
+    between two Qwen sizes does, and five merged shards otherwise cannot say
+    how any of them was decoded.
+
+  Safe to switch now only because nobody has run `main` yet. Mid-run this would
+  have made shards incomparable.
 - ~~**Whether to keep `remove` on the severity axis.**~~ **DECIDED
   2026-09-04: dropped from severity comparisons, reported as binary.** Its
   severity 1 and 3 differ by 0.5 8-bit levels out of 35 (against blur's
@@ -800,6 +991,11 @@ the harness.
    and an axis mean cannot show that.
 4. Cross-VM determinism hash from the two VMs that have not reported it.
 5. `main`: 150 bases, **~1.7h/VM** at greedy, sharded five ways.
+6. The nuisance/exploitability sweep: ~1h on ONE VM that has `data/bases` and a
+   judge checkpoint. Independent of `main` and of which photographs it uses, so
+   it can run the moment any VM has bases. Run the `--dry-run` on real bases
+   first — 30 seconds, no GPU — since the only untested assumption left is the
+   shape of a real `regions.json`.
 
 **Base count DECIDED 2026-09-04: `main` is 150 bases.** `config.yaml` says so.
 Not pool-limited — train2017 supplies ~1,090. The 50 over 100 cost 2.7 extra
@@ -824,6 +1020,14 @@ more PHOTOGRAPHS is the lever, never more regions per photograph.
 - Schema-constrained decoding is mandatory — unconstrained covers ~43% of
   regions while reporting a healthy parse rate.
 - A 4B judge does NOT fix throughput. 26x concurrency bought 2%.
+- Greedy in both `stage3_judge` and `run_shard.sh`; the floor is a separate
+  `--temperature 0.7 --n-samples 5` run, and no env-var override exists on
+  purpose. Decided 2026-09-04, see the DECIDE FIRST entry.
+- Presentation axes are a stage-3 flag, not a manifest column. A sixth
+  `variant_id` field re-renders everything and voids the fixture hash.
+- The nuisance analysis lives in `scripts/nuisance_report.py`, not stage 4:
+  it pairs on `(variant_id, scored_region_id)` across presentations, and
+  `delta_table` would pool the conditions' controls without saying so.
 
 **Disk is the live constraint on `mcvgpu2025s-0050`:** FLUX (~34GB) +
 Qwen3-VL-8B (~16GB) + Qwen3-VL-4B (~9GB) + COCO val2017 (~1GB) + a second venv
@@ -887,9 +1091,10 @@ the pilot; stage 4 has seen real 5-base data.)
      but kept in the leakage matrix, where "damage in region i moved the
      background score" is a real thing to see.
 2. Pick and wire the second judge family (cross-family agreement is a finding).
-3. Nuisance and exploitability tests are designed but not implemented — they
-   reuse the stage 3 harness with varied presentation (box/mask/crop, prompt
-   order, region count).
+3. ~~Nuisance and exploitability tests are designed but not implemented.~~
+   **IMPLEMENTED 2026-09-04, never run on a GPU.** See "Nuisance and
+   exploitability" below. Laptop-side is verified; the sweep is ~1h on one VM
+   and blocked only on that VM having `data/bases`.
 4. Figures for the report.
 
 ## Guardrails

@@ -119,23 +119,16 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 | Role | Where it stands | Next |
 |---|---|---|
 | **Editor VM** | stages 0+1 working, 5 images edited (now superseded) | Fetch the 150 photos, run stage 0, edit all 150 (~3 min each, one overnight run), then `tar czf bases.tar.gz -C data bases` and upload. **Everyone else is waiting on this.** |
-| **Judge harness** | working, 100% parse, real published prompt | Decide the sampling config — decision 1 below |
+| **Judge harness** | working, 100% parse, real published prompt, sampling decided | Nothing blocking. Run the nuisance sweep on the first VM that gets the photos — ~1h, no coordination needed |
 | **Corruption + manifest** | determinism confirmed on 3 of 5 VMs | Chase the other two. Own `config.yaml` |
 | **Analysis** | stage 4 runs on real data | Start the figures. The tie-rate and coherence tables are the headline ones, not AUROC |
 | **Second judge** | Qwen3-VL-4B downloaded and working | Pick a second *family*, not just a second size, and justify it |
 
 ---
 
-## Decisions we need to make together
+## The one decision still open
 
-1. **Sampling config for the main run.** Right now we ask the judge 5 times at a
-   random-ish temperature. That made our first pilot unreadable — the judge
-   disagreed with *itself* by 38% of the scale on identical inputs. Switching to
-   deterministic fixed it, and cut the run roughly threefold. Likely
-   answer: deterministic for the main run, plus a small sampled run to document
-   the instability. **Decide before anyone starts the main run.**
-
-2. **"remove the X" instructions in stage 0.** They clash with `remove` also
+**"remove the X" instructions in stage 0.** They clash with `remove` also
    being one of our damage types. We also thought "was this region preserved?"
    was meaningless for a region we told the editor to delete — but re-reading
    the paper's rubric, that axis is at least as plausibly about *overediting*,
@@ -145,6 +138,49 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
    cap removals at one per photo (see below) rather than dropping them.
 
 ## Settled since the last brief
+
+**The sampling config is decided: we ask the judge once, deterministically.**
+We used to ask it five times at a random-ish temperature, which is what made
+the first pilot unreadable — the judge disagreed with *itself* by 38% of the
+scale on identical inputs, and that disagreement was bigger than any effect we
+were looking for. Asking once fixed the readability and cut the run roughly
+threefold.
+
+Worth knowing why it was five in the first place, because it wasn't an
+accident. Asking repeatedly is the only way to measure how much the judge
+disagrees with itself, and that number is the denominator everything else is
+compared against. So we still do it — once, on a small set, as its own
+deliberate run. The mistake was leaving a measuring instrument switched on for
+the production run.
+
+You don't have to remember any of this: `run_shard.sh` now says it out loud
+rather than inheriting whatever the code happened to default to. There's no
+setting to override, on purpose — every VM has to decode the same way or the
+shards can't be combined, exactly like the GPU-memory setting.
+
+**The last two analyses are written.** We promised four: does the score find the
+damaged region, is it just a whole-image score in disguise, does it move for
+things that shouldn't matter, and can it be gamed. The first two have been
+running for a while. The other two now exist.
+
+They work by judging *the same pictures* twice, packaged differently:
+
+- shuffle the order we list the regions in
+- show one fewer region
+- draw boxes on the picture instead of only describing them in words
+- send no picture at all
+- sharpen and boost the contrast of the edited picture, globally, without
+  fixing any edit
+
+The first two change no pixel whatsoever. If the score moves for those, it is
+responding to how we phrased the question. The last one is the interesting one:
+the paper's formula multiplies every region's score by a single
+whole-image "quality" number, so a picture that merely *looks* nicer might lift
+every region at once — which is exactly the trick an editor being trained on
+this reward would learn.
+
+It's about an hour on one machine, needs no coordination with anyone, and the
+results stand on their own — it doesn't have to wait for the main run.
 
 **Our edits were mostly one instruction wearing different hats.** Counting the
 old photos, 57% of the regions were "change this object's colour". That is a
@@ -225,7 +261,8 @@ caught it.
 
 - **Week 1 — done.** Setup, pipeline verified, pilot, go/no-go. Verdict GO.
 - **Week 2** — 150 images edited and shipped; manifest frozen; main run.
-- **Week 3** — second judge family; nuisance + exploitability tests.
+- **Week 3** — second judge family; run the nuisance + exploitability sweep
+  (the code is written; it needs an hour on a machine that has the photos).
 - **Week 4** — figures, LaTeX, repo cleanup.
 - **Week 5** — buffer and the 5-minute talk. Don't plan work here.
 

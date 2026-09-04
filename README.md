@@ -22,6 +22,7 @@ measurable. Inference only — no training.
 src/schema.py             manifest schema, variant_id, seed derivation, hash sharding
 src/corruptions.py        5 seeded feathered degradations (determinism-critical)
 src/judge_prompt.py       A.4.3 prompt verbatim, JSON schemas, Eq. (3) reward
+src/presentation.py       nuisance / exploitability packaging axes
 src/stage0_coco.py        COCO instance-seg filter -> multi-region base specs
 src/stage1_edit.py        FLUX Kontext editing            [editor VM]
 src/build_manifest.py     expand base specs into the design matrix
@@ -35,11 +36,12 @@ scripts/run_shard.sh      one VM's share of stages 2+3
 scripts/smoke_edit.py     one real FLUX edit on a synthetic image   [editor VM]
 scripts/smoke_judge.py    one real judge call on synthetic images   [judge VM]
 scripts/diagnose_parse.py why judge responses failed, from a parquet     [CPU]
+scripts/nuisance_report.py  nuisance + exploitability, across presentations [CPU]
 scripts/verify_corruption.py  did the corruption damage the image, and
                           only inside the mask?                         [CPU]
 scripts/verify_determinism.sh  cross-VM hash check
 
-tests/                    4 suites, all CPU, all run in seconds
+tests/                    5 suites, all CPU, all run in seconds
 config.yaml               pilot / main / full_cross profiles
 ```
 
@@ -166,6 +168,51 @@ python -m src.stage4_analyze --scores 'out/scores_shard*.parquet' --all-readouts
 `run_shard.sh` runs stages 2 and 3, and deletes its `/dev/shm` scratch when it
 finishes. Set `KEEP_SCRATCH=1` while iterating on stage 3.
 
+Judging is **greedy** (`--temperature 0 --n-samples 1`), passed explicitly by
+`run_shard.sh` and matching `stage3_judge`'s own defaults. Like `--gpu-util` it
+must be identical on every VM, so there is no environment-variable override.
+The one sampled run — which is what supplies the noise floor, since greedy has
+no within-variant spread — is a separate command with its own `--out`.
+
+### Nuisance and exploitability
+
+The same images, judged again with different packaging. `--presentation` is a
+stage-3 flag rather than a manifest field, so no variant is re-rendered and no
+`variant_id` changes; the pixel-side axes are applied in memory at request
+build. Runs on **one** VM, ~1h for the whole sweep.
+
+```bash
+python -m src.build_manifest --profile pilot
+python -m src.stage2_corrupt --manifest out/manifest.parquet \
+    --bases data/bases --out /dev/shm/mcv/nuisance --shard 0 --of 1
+mkdir -p out/nuisance
+
+for P in baseline shuffle subset box noimg enhance; do
+  python -m src.stage3_judge --manifest out/manifest.parquet --bases data/bases \
+      --variants /dev/shm/mcv/nuisance --shard 0 --of 1 --presentation "$P" \
+      --temperature 0 --n-samples 1 --out "out/nuisance/scores_$P.parquet"
+done
+
+# the noise floor: same variants, baseline packaging, sampled
+python -m src.stage3_judge --manifest out/manifest.parquet --bases data/bases \
+    --variants /dev/shm/mcv/nuisance --shard 0 --of 1 --presentation baseline \
+    --temperature 0.7 --n-samples 5 --out out/nuisance/floor_baseline.parquet
+
+python -m scripts.nuisance_report
+```
+
+Three things about that recipe are load-bearing:
+
+- **`--profile pilot`, not `--limit`.** A row limit can take a base's controls
+  and drop its corrupted rows, leaving nothing to compare against.
+- **`scores_*` and `floor_*` are different prefixes.** The floor run also
+  carries `presentation == "baseline"` and is indistinguishable from the greedy
+  baseline by any column, so the two globs are what keeps them apart.
+- **`out/nuisance/` must not match `out/scores_shard*.parquet`.** Stage 4 does
+  not group by `presentation`; pointed at these files it would pool every
+  condition's clean controls into one baseline without saying so. Read them
+  with `scripts/nuisance_report.py` instead.
+
 In stage 4's output, read `=== does the score move at all? ===` first. It gives
 the share of damaged regions whose score is byte-identical to their clean
 control, split by target and non-target. AUROC is 0.5 both for a judge that
@@ -196,10 +243,15 @@ react to".
 python tests/test_determinism.py   # 5 determinism properties
 python tests/test_stage0.py        # selection logic, via a stub COCO
 python tests/test_stage4.py        # 3 synthetic judges with known behaviour
+python tests/test_nuisance.py      # presentation axes + 3 judges with known
+                                   # nuisance behaviour
 python tests/test_syntax.py        # everything parses; GPU modules import without torch
 ```
 
-All four are CPU-only and finish in seconds. Keep them passing.
+All five are CPU-only and finish in seconds. Keep them passing.
+
+`test_nuisance.py` also builds the synthetic base fixture that makes
+`stage3_judge --dry-run` runnable on a machine with no stage-1 output.
 
 **The cross-VM fixture hash must match on all five VMs.** If it does not, the
 shards are not comparable and every downstream number is meaningless. The Linux
@@ -229,4 +281,13 @@ One property falls straight out of Equation (3): the region reward is
 `sqrt(phi(IF) * AES) / C`, where `AES = min(PQ)` is a single **image-level**
 term multiplying every region of that image. Part of each "region" reward is
 global by construction, before any judge behaviour is measured. Stage 4 reports
-`reward` and `phi` side by side so this is visible.
+`reward` and `phi` side by side so this is visible, and the `enhance`
+presentation tests it directly: a global cosmetic lift that improves no edit
+should, if that reading is right, raise every region's reward through `AES`
+alone.
+
+Decoding is greedy and every scores parquet records `n_samples` and
+`temperature` alongside `judge`, so a merged set of shards can always say how it
+was produced. The `shuffle` presentation permutes the JSON schema's region slots
+along with the prompt, since the grammar pins slot *k* to the *k*-th listed
+region; the constraint is on format only either way.
