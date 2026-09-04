@@ -49,6 +49,21 @@ All five stages run on real data: COCO filtering → editing with FLUX → damag
 one region → judging with Qwen3-VL-8B → analysis. 100% of judge responses parse
 and every region gets scored.
 
+**The 150 photographs for the main run are now chosen.** The editor VM ran the
+selection on 2026-09-04: 1,372 photos in COCO's large split pass our rules, we
+keep 150 of them, and they carry 476 regions between them — 3.17 per photo. If
+you run the selection yourself and get a different count, say so before doing
+anything else; it means your machine is choosing different photographs from
+everyone else's.
+
+**Everything from the pilot is now dead data.** The photos changed, so every
+photo's name changed with it. If you are holding a `data/bases`, an `out/` or
+any scores from before today, delete them — they cannot be mixed with what is
+coming.
+
+Editing those 150 is the next thing to happen: one overnight run on the editor
+VM, then the tarball everyone is waiting on.
+
 ### What the pilot found
 
 On 5 images we damaged one region at a time and watched the scores.
@@ -118,7 +133,7 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 
 | Role | Where it stands | Next |
 |---|---|---|
-| **Editor VM** | stages 0+1 working, 5 images edited (now superseded) | Fetch the 150 photos, run stage 0, edit all 150 (~3 min each, one overnight run), then `tar czf bases.tar.gz -C data bases` and upload. **Everyone else is waiting on this.** |
+| **Editor VM** | 150 photos selected and downloaded, 476 regions written, editor checked and ready | Edit all 150 (~3 min each, one overnight run), then `tar czf bases.tar.gz -C data bases` and upload. **Everyone else is waiting on this.** |
 | **Judge harness** | working, 100% parse, real published prompt, sampling decided | Nothing blocking. Run the nuisance sweep on the first VM that gets the photos — ~1h, no coordination needed |
 | **Corruption + manifest** | determinism confirmed on 3 of 5 VMs | Chase the other two. Own `config.yaml` |
 | **Analysis** | stage 4 runs on real data | Start the figures. The tie-rate and coherence tables are the headline ones, not AUROC |
@@ -204,8 +219,8 @@ editor nor the judge can know which one we meant — avoidable noise we were
 creating ourselves.
 
 That rule threw away three quarters of our photos, so we switched from COCO's
-small split to its large one: 46 usable photos became roughly 1,090. We
-download only the couple of hundred we actually use, not the 18GB set.
+small split to its large one: 46 usable photos became 1,372, measured on the
+full split. We download only the 150 we actually use, not the 18GB set.
 
 **`remove` is now reported as one condition, not a severity ladder.** Its
 "mild" and "severe" settings differ by 0.5 out of 35 — inpainting deletes the
