@@ -61,8 +61,17 @@ photo's name changed with it. If you are holding a `data/bases`, an `out/` or
 any scores from before today, delete them — they cannot be mixed with what is
 coming.
 
-Editing those 150 is the next thing to happen: one overnight run on the editor
-VM, then the tarball everyone is waiting on.
+**The photos are edited and published — nobody is blocked any more.** All 150
+went through FLUX overnight on 2026-09-04 (8h53m, about 3.5 minutes each). Get
+them with:
+
+```bash
+cd ~/mcv-spatial-audit
+python -c "from huggingface_hub import hf_hub_download; print(hf_hub_download('mcv-spatial-audit/mcv-spatial-audit', 'bases.tar.gz', repo_type='dataset'))"
+tar xzf <the path it prints> -C data      # creates data/bases
+```
+
+146MB, public, no token needed. That is the only big download in the project.
 
 ### One thing we found while checking the edits
 
@@ -152,7 +161,7 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 
 | Role | Where it stands | Next |
 |---|---|---|
-| **Editor VM** | 150 photos selected and downloaded, 476 regions written, editor checked and ready | Edit all 150 (~3.5 min each, about 9h - one overnight run), then `tar czf bases.tar.gz -C data bases` and upload. **Everyone else is waiting on this.** |
+| **Editor VM** | done - 150 photos edited and published as `bases.tar.gz` | Nothing blocking. The VM still holds FLUX, so it is the one to use if any base ever needs re-editing |
 | **Judge harness** | working, 100% parse, real published prompt, sampling decided | Nothing blocking. Run the nuisance sweep on the first VM that gets the photos — ~1h, no coordination needed |
 | **Corruption + manifest** | determinism confirmed on 3 of 5 VMs | Chase the other two. Own `config.yaml` |
 | **Analysis** | stage 4 runs on real data | Start the figures. The tie-rate and coherence tables are the headline ones, not AUROC |

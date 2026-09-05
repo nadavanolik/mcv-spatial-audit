@@ -38,11 +38,12 @@ offload mode you asked for - all without fetching a single weight. Then:
 does one real edit on a synthetic image and reports s/image and peak VRAM.
 
 After this runs:
+    cp out/edit_drift.csv data/bases/          # if it has been computed
     tar czf bases.tar.gz -C data bases
     python -c "from huggingface_hub import HfApi; HfApi().upload_file(
         path_or_fileobj='bases.tar.gz', path_in_repo='bases.tar.gz',
-        repo_id='YOUR_ORG/mcv-probe-set', repo_type='dataset')"
-    # ~300MB. That is the only large transfer in the entire project.
+        repo_id='mcv-spatial-audit/mcv-spatial-audit', repo_type='dataset')"
+    # 146MB for 150 bases. The only large transfer in the entire project.
 """
 from __future__ import annotations
 

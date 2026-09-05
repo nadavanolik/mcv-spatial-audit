@@ -187,6 +187,12 @@ All five test suites pass on the laptop. Cross-VM determinism is confirmed on
 **three of five VMs** (`0050`, `0043`, `0053`), all printing
 `776feeddd281fa726195bf504c7b19c8`.
 
+**Stage 1 is done** (2026-09-05, `mcvgpu2025s-0004`): 150 bases edited in
+8h53m at 213.1s each, every `edit.png` at source resolution, every instruction
+hash fresh. The tarball is published and downstream is unblocked:
+`mcv-spatial-audit/mcv-spatial-audit` on the Hub, `bases.tar.gz`, 146MB,
+public, carrying `bases.json`, `stage1_provenance.json` and `edit_drift.csv`.
+
 **Outstanding:**
 
 - Determinism hash from the last two VMs. This is the only unreported
@@ -210,11 +216,10 @@ All five test suites pass on the laptop. Cross-VM determinism is confirmed on
 
 **Do next, in order:**
 
-1. Editor VM: `--survey` on `instances_train2017.json`, then
-   `--list-urls | wget`, then stage 0, then edit 150 bases (~215s each,
-   ~9h overnight), then `tar czf bases.tar.gz -C data bases` and upload.
-   **Everything downstream is blocked on that tarball.** Base ids change
-   completely — they are COCO image ids and the split changed.
+1. ~~Editor VM: stage 0, then edit 150 bases, then upload the tarball.~~
+   **Done 2026-09-05.** Every VM now pulls `bases.tar.gz` from
+   `mcv-spatial-audit/mcv-spatial-audit` instead. Base ids are COCO
+   train2017 image ids; anything from the pilot is dead data.
 2. Cross-VM determinism hash from the two VMs that have not reported it.
 3. `main`: 150 bases, **~1.7h/VM** at greedy, sharded five ways.
 4. The nuisance/exploitability sweep: ~1h on **one** VM that has `data/bases` and
