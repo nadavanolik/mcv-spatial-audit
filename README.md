@@ -41,6 +41,7 @@ scripts/nuisance_report.py  nuisance + exploitability, across presentations [CPU
 scripts/verify_corruption.py  did the corruption damage the image, and
                           only inside the mask?                         [CPU]
 scripts/verify_determinism.sh  cross-VM hash check
+scripts/verify_edit_drift.py  did stage 1 keep the layout the masks describe?
 
 tests/                    5 suites, all CPU, all run in seconds
 config.yaml               pilot / main / full_cross profiles
@@ -103,7 +104,17 @@ hf auth login     # FLUX.1-Kontext-dev is gated; accept the licence on its model
 ## Data
 
 Only the machine running stage 0 needs COCO. Everyone else works from
-`bases.tar.gz`.
+`bases.tar.gz`, published on the Hub and public, so no token is needed:
+
+```bash
+cd <repo>
+python -c "from huggingface_hub import hf_hub_download; print(hf_hub_download('mcv-spatial-audit/mcv-spatial-audit', 'bases.tar.gz', repo_type='dataset'))"
+tar xzf <the path it prints> -C data       # creates data/bases
+```
+
+146MB: 150 bases, 476 regions, both `source.png` and `edit.png`, the masks,
+`bases.json`, `stage1_provenance.json` and `edit_drift.csv`. That single
+download replaces stages 0 and 1 for every machine that is not the editor VM.
 
 **Never download an image split.** The selection filter keeps roughly 1 image
 in 100, so fetching train2017's 18GB to keep ~150 files is 700x more transfer
@@ -156,7 +167,7 @@ both splits are equally public to the models involved.
 ```
 stage 0  COCO filter        CPU     once     -> data/bases/{regions,masks,source}
 stage 1  editing (FLUX)     GPU     once     -> data/bases/*/edit.png   [editor VM]
-         ---- tar + upload ~450MB to HF Hub. The only large transfer. ----
+         ---- tar + upload 146MB to HF Hub. The only large transfer. ----
 build_manifest              CPU     once     -> out/manifest.parquet
 stage 2  corruption         CPU     per-VM   -> /dev/shm  (regenerated, never shipped)
 stage 3  judging (vLLM)     GPU     per-VM   -> out/scores_shard{k}.parquet
@@ -169,8 +180,10 @@ why the multi-gigabyte corrupted set never crosses the network. Stage 1 is
 its output is an immutable artefact generated exactly once and described by
 `data/bases/stage1_provenance.json`.
 
-Measured on one A10: stage 1 **189s/image**, stage 3 **2.84s/request** at greedy
-decoding. The `main` profile is 150 bases: **~1.7h/VM** sharded five ways.
+Measured over the full 150-base run: stage 1 **213.1s/image** (8h53m total);
+stage 3 **2.84s/request** at greedy decoding. Stage 1 is PCIe-bound under
+sequential offload, so it varies by host - 191.4s on one A10, 213.1s on another.
+The `main` profile is 150 bases: **~1.7h/VM** sharded five ways.
 
 ## Usage
 
@@ -179,13 +192,15 @@ decoding. The `main` profile is 150 bases: **~1.7h/VM** sharded five ways.
 # stage 1; run it anywhere else instead of copying data/bases around.
 bash scripts/stage0.sh
 
-# stage 1 — editor VM only, once, ~8h for 150 bases
-python -m src.stage1_edit --limit 150
+# stage 1 — editor VM only, once, ~9h for 150 bases. Detach it: an ssh drop
+# would otherwise kill a run that survives everything else.
+nohup python -m src.stage1_edit > ~/stage1.log 2>&1 < /dev/null &
 
 # everyone, once bases.tar.gz is distributed
 python -m src.build_manifest --profile pilot          # or main
 SHARD=<0-4> OF=5 bash scripts/run_shard.sh
-python -m src.stage4_analyze --scores 'out/scores_shard*.parquet' --all-readouts
+python -m src.stage4_analyze --scores 'out/scores_shard*.parquet' --all-readouts \
+    --drift-csv data/bases/edit_drift.csv --min-edge-iou 0.4
 ```
 
 `run_shard.sh` runs stages 2 and 3, and deletes its `/dev/shm` scratch when it
@@ -254,6 +269,7 @@ python -m src.stage1_edit --preflight             # API, auth, gating, disk, VRA
 python -m src.stage3_judge … --dry-run            # builds every request, never imports vLLM
 python -m scripts.diagnose_parse --scores …       # why judge responses failed
 python -m scripts.verify_corruption --manifest …  # was the damage real, and only in the mask?
+python -m scripts.verify_edit_drift               # did the edit move what the masks describe?
 ```
 
 `verify_corruption` is the one to run before claiming the judge ignored

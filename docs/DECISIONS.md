@@ -213,6 +213,12 @@ regions survive shifts every instruction. Cheap at 5 edits; 8h after the
 
 ---
 
+### Cross-VM determinism: four of five
+
+`776feeddd281fa726195bf504c7b19c8` on `0050`, `0043`, `0053` and `0004`
+(2026-09-05), each with numpy 1.26.4 / cv2 4.11.0 / pillow 10.4.0 and all five
+properties passing.
+
 ## Stage 1 — editing
 
 Verified on `mcvgpu2025s-0050`, 2026-08-26.

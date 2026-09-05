@@ -126,7 +126,7 @@ images and gives ~32× the data. Nobody should quote these numbers as final.
 
 ### Everyone: send Nadav your determinism hash
 
-**~10 minutes. No GPU needed. Two of five VMs still owe this.**
+**~10 minutes. No GPU needed. One of five VMs still owes this.**
 
 Why it matters: if your machine's damaged images differ from mine by even one
 pixel, your results can't be combined with mine — and nothing downstream would
@@ -163,7 +163,7 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 |---|---|---|
 | **Editor VM** | done - 150 photos edited and published as `bases.tar.gz` | Nothing blocking. The VM still holds FLUX, so it is the one to use if any base ever needs re-editing |
 | **Judge harness** | working, 100% parse, real published prompt, sampling decided | Nothing blocking. Run the nuisance sweep on the first VM that gets the photos — ~1h, no coordination needed |
-| **Corruption + manifest** | determinism confirmed on 3 of 5 VMs | Chase the other two. Own `config.yaml` |
+| **Corruption + manifest** | determinism confirmed on 4 of 5 VMs | Chase the last one. Own `config.yaml` |
 | **Analysis** | stage 4 runs on real data | Start the figures. The tie-rate and coherence tables are the headline ones, not AUROC |
 | **Second judge** | Qwen3-VL-4B downloaded and working | Pick a second *family*, not just a second size, and justify it |
 

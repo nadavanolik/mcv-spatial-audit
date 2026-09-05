@@ -184,7 +184,7 @@ region coverage 100%. **The go/no-go pilot returned GO** — see
 [`docs/FINDINGS.md`](docs/FINDINGS.md).
 
 All five test suites pass on the laptop. Cross-VM determinism is confirmed on
-**three of five VMs** (`0050`, `0043`, `0053`), all printing
+**four of five VMs** (`0050`, `0043`, `0053`, `0004`), all printing
 `776feeddd281fa726195bf504c7b19c8`.
 
 **Stage 1 is done** (2026-09-05, `mcvgpu2025s-0004`): 150 bases edited in
@@ -195,8 +195,7 @@ public, carrying `bases.json`, `stage1_provenance.json` and `edit_drift.csv`.
 
 **Outstanding:**
 
-- Determinism hash from the last two VMs. This is the only unreported
-  verification.
+- Determinism hash from the last VM. This is the only unreported verification.
 - `annToMask` in stage 0 has never been exercised.
 - The nuisance/exploitability sweep has never run on a GPU. The one thing that
   could still invalidate the `shuffle` axis is whether vLLM/xgrammar accepts a
@@ -220,7 +219,7 @@ public, carrying `bases.json`, `stage1_provenance.json` and `edit_drift.csv`.
    **Done 2026-09-05.** Every VM now pulls `bases.tar.gz` from
    `mcv-spatial-audit/mcv-spatial-audit` instead. Base ids are COCO
    train2017 image ids; anything from the pilot is dead data.
-2. Cross-VM determinism hash from the two VMs that have not reported it.
+2. Cross-VM determinism hash from the one VM that has not reported it.
 3. `main`: 150 bases, **~1.7h/VM** at greedy, sharded five ways.
 4. The nuisance/exploitability sweep: ~1h on **one** VM that has `data/bases` and
    a judge checkpoint. Independent of `main` and of which photographs it uses, so
