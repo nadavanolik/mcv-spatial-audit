@@ -311,6 +311,45 @@ def response_coherence(d: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def drift_robustness(d: pd.DataFrame, drift_csv: str, thresh: float) -> pd.DataFrame:
+    """Headline numbers on all bases vs bases whose layout survived the edit.
+
+    Stage 0's masks are computed on source.png and applied to edit.png. Where
+    FLUX re-composed the scene, the mask no longer covers the object the judge
+    is told about, so we corrupt background while claiming to have damaged a
+    region - and that looks exactly like a judge that cannot localise. The
+    confound points at our own conclusion, so it cannot be waved away.
+
+    It also does not have to be measured precisely. If the headline numbers
+    agree across the split, the result does not depend on the bases where the
+    geometry is doubtful, and how good the proxy is stops mattering. Only if
+    they diverge is a per-region check (an independent detector, never our own
+    judge) worth its cost.
+
+    Pooled, not averaged over the per-condition cells of sensitivity(): a mean
+    of means would weight a 3-row cell like a 300-row one.
+    """
+    drift = pd.read_csv(drift_csv, dtype={"base_id": str})
+    keep = set(drift.loc[drift.edge_iou >= thresh, "base_id"])
+    fg = d[d.scored_region_id != BG]
+
+    rows = []
+    for name, g in (("all", fg), (f"edge_iou>={thresh}",
+                                  fg[fg.base_id.isin(keep)])):
+        tgt = g[g.is_target]
+        coh = response_coherence(g)
+        auroc = (roc_auc_score(g.is_target, -g.delta)
+                 if g.is_target.nunique() > 1 else float("nan"))
+        rows.append(dict(
+            subset=name, n_bases=g.base_id.nunique(), n_rows=len(g),
+            target_unchanged=float((tgt.delta == 0).mean()) if len(tgt) else float("nan"),
+            auroc=auroc,
+            frac_mixed=float(coh.frac_mixed.iloc[0]) if len(coh) else float("nan"),
+            mixed_if_independent=float(coh.mixed_if_independent.iloc[0]) if len(coh) else float("nan"),
+        ))
+    return pd.DataFrame(rows)
+
+
 def localization(d: pd.DataFrame) -> pd.DataFrame:
     """AUROC: can delta identify WHICH region was corrupted?
 
@@ -430,6 +469,14 @@ def main():
                          "damaged, so it forces AUROC toward 0.5 regardless of "
                          "how well the judge localises. Try 0 for reward, or 0 "
                          "for phi/sc_* on the 0-25 scale.")
+    ap.add_argument("--drift-csv", default=None,
+                    help="out/edit_drift.csv from scripts/verify_edit_drift.py. "
+                         "With it, every headline number is reported twice: "
+                         "all bases, and only those whose layout survived the "
+                         "edit. See --min-edge-iou.")
+    ap.add_argument("--min-edge-iou", type=float, default=0.4,
+                    help="edge-IoU cut for the --drift-csv robustness split "
+                         "(default 0.4)")
     ap.add_argument("--all-readouts", action="store_true",
                     help="run localization for every readout in READOUTS - the "
                          "success/preserve split is the diagnostic for a judge "
@@ -538,6 +585,20 @@ def main():
         else:
             print(f"  {c}: n/a")
         red.to_csv(out / f"redundancy_{c}.csv", index=False)
+
+    if a.drift_csv:
+        print(f"\n=== robustness: bases whose layout survived the edit "
+              f"(edge IoU >= {a.min_edge_iou}) ===")
+        rb = drift_robustness(d, a.drift_csv, a.min_edge_iou)
+        print(rb.round(4).to_string(index=False))
+        rb.to_csv(out / "drift_robustness.csv", index=False)
+        print("  Agreement across the two rows means the conclusion does not "
+              "rest on bases")
+        print("  where a source-coordinate mask may no longer cover its "
+              "object. Divergence")
+        print("  means the masks need a per-region check against an "
+              "independent detector -")
+        print("  never against the judge under audit.")
 
     # The headline sanity check: is the target-region effect even above noise?
     floor = nf.set_index("judge")["median"].to_dict() if len(nf) else {}

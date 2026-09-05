@@ -259,6 +259,57 @@ Target region `[30,30,200]` -> `[244,4,6]` (redness -85 -> +239); the untouched
 control moved 15.6 against the target's 144.7. Some global drift exists and
 shows up in the noise floor.
 
+### The edit does not always preserve layout, and that confound points our way
+
+Measured on all 150 main bases, 2026-09-05, `scripts/verify_edit_drift.py`:
+
+| edge IoU (Canny, dilated, colour-invariant) | |
+|---|---|
+| p5 / p25 / p50 / p75 / p90 | 0.24 / 0.36 / 0.46 / 0.58 / 0.69 |
+| min / max | 0.16 / 0.93 |
+| below 0.40 | 54 of 150 |
+| below 0.30 | 19 of 150 |
+
+Photometric drift outside every mask is high too (median 44.9 of 255, 10 sources
+are black-and-white photographs that come back colorized), but that number is
+mostly harmless and was nearly over-read: stage 2's baseline is `edit.png`, not
+`source.png`, so a global recolour cancels out of every delta. The colour-blind
+edge measure is the one that matters.
+
+Why it matters: stage 0 computes masks on `source.png`, stage 2 applies them to
+`edit.png`, and stage 3 shows the judge boxes in SOURCE coordinates. Where FLUX
+re-poses a person or re-composes an interior, the mask named "person" covers
+whatever moved into that spot — so we corrupt background while telling the judge
+we damaged a region. **That looks exactly like a judge that cannot localise,
+which is this project's finding.** The confound mimics the result, so it cannot
+be waved away.
+
+The low tail is not random: it is overwhelmingly indoor furniture (bed, couch,
+chair, vase). Street scenes hold their geometry; rooms get re-composed. The
+verified pairs bear this out — `000000268556` (motorcycle, layout visibly
+intact) scores 0.86, and the visibly re-posed `000000559665` sits far below.
+
+**Decision: measure and report, do not filter the data.** Every headline number
+is reported twice — all 150, and the subset above `--min-edge-iou` (0.4 by
+default) — via `stage4_analyze --drift-csv`. If the two agree, the result does
+not rest on the doubtful bases and the proxy's weakness stops mattering. Only if
+they diverge is a per-region check worth its cost, and that check must use an
+INDEPENDENT detector (OWLv2); the judge under audit cannot certify our ground
+truth.
+
+Two alternatives were considered and rejected. Dropping the low-IoU bases and
+re-editing replacements is cheapest before the manifest is frozen, but it trades
+a measurable confound for an invisible selection bias — the discarded scenes are
+precisely the dense, cluttered, multi-object interiors where per-region scoring
+should earn its keep — and it destroys the evidence that the result is robust.
+Running the detector pass up front buys per-region truth for ~2h, but it is
+insurance against a risk not yet observed: if the split agrees, no amount of
+detector precision improves on that.
+
+`edge_iou` is an UPPER BOUND on displacement. "Change the chair to glass" is
+supposed to destroy that object's edges, so a low score means "cannot vouch for
+this base", never "this base moved".
+
 ### `stage1_provenance.json` is the reproducibility claim
 
 Model revision, diffusers / transformers / torch versions, steps, guidance.

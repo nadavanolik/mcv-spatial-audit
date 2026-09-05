@@ -64,6 +64,25 @@ coming.
 Editing those 150 is the next thing to happen: one overnight run on the editor
 VM, then the tarball everyone is waiting on.
 
+### One thing we found while checking the edits
+
+FLUX does not always keep the furniture where it was. On street scenes it edits
+the object we asked about and leaves the rest alone. On indoor scenes it often
+re-composes the whole room — the bed moves, the person turns around, the framing
+zooms. Roughly a third of our photos are affected.
+
+Why we care: we mark the regions on the ORIGINAL photo and then damage those
+same spots in the EDITED photo. If the sofa moved, we are damaging the wall
+behind where the sofa used to be, while telling the judge we damaged the sofa.
+The judge then looks like it failed to find the damage — which is exactly the
+conclusion we are testing. In other words this mistake would flatter our own
+result, so we cannot ignore it.
+
+What we are doing about it: keeping every photo, and reporting every headline
+number twice — once on all 150, once on only the photos that kept their layout.
+If both say the same thing, the finding does not depend on the messy ones. Only
+if they disagree do we need to do more work.
+
 ### What the pilot found
 
 On 5 images we damaged one region at a time and watched the scores.

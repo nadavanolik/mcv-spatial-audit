@@ -159,6 +159,8 @@ scripts/smoke_edit.py   one real FLUX edit on a synthetic image  [EDITOR VM ONLY
 scripts/diagnose_parse.py     why judge responses failed, from a parquet  [CPU]
 scripts/verify_corruption.py  did the corruption damage the image, and only
                         inside the mask? [CPU] -- run before any insensitivity claim
+scripts/verify_edit_drift.py  did stage 1 keep the layout the masks describe?
+                        [CPU] -- feeds stage4's --drift-csv robustness split
 scripts/nuisance_report.py    paired-delta analysis across presentations  [CPU]
 
 tests/test_determinism.py   5 determinism properties
@@ -198,6 +200,13 @@ All five test suites pass on the laptop. Cross-VM determinism is confirmed on
   measurement on the pilot parquet, not by re-reading the paper.
 - `jpeg`, `noise` and `saturate` have never been judged on real data; the pilot
   ran only `[none, blur, remove]`.
+- **Stage 1 does not always preserve layout.** Edge IoU between source and edit
+  is below 0.40 on 54 of 150 bases, mostly indoor furniture. Masks are computed
+  on `source.png` and applied to `edit.png`, so a re-composed scene means we
+  corrupt background while claiming a region — a confound that MIMICS the
+  finding. Settled by reporting every headline twice (`stage4_analyze
+  --drift-csv out/edit_drift.csv`), not by filtering. See
+  [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 **Do next, in order:**
 

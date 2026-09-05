@@ -29,6 +29,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.stage4_analyze import (  # noqa: E402
+    drift_robustness,
     load, usable, noise_floor, delta_table, localization,
     localization_by_corruption, leakage_matrix, redundancy, axis_table,
     BINARY, FLAT_SEVERITY,
@@ -315,6 +316,48 @@ def main() -> int:
                 repr([c for c in set(r.stdout) if not c.isascii()][:5]))
 
     print("\n" + "=" * 68)
+    print("10. DRIFT ROBUSTNESS SPLIT")
+    print("=" * 68)
+    # Half the fixture's bases are marked as having lost their layout. The
+    # split must restrict to the other half and leave the `global` judge's
+    # verdict unchanged - a subset that moved the answer here would mean the
+    # split itself, not the geometry, was driving the numbers.
+    drift = pd.DataFrame([
+        dict(base_id=f"base{b:03d}", edge_iou=0.9 if b % 2 == 0 else 0.2)
+        for b in range(N_BASES)])
+    drift_csv = tmp / "edit_drift.csv"
+    drift.to_csv(drift_csv, index=False)
+
+    dd_glob = delta_table(usable(df[df.judge == "fixture/global"], "phi"), "phi")
+    rb = drift_robustness(dd_glob, str(drift_csv), 0.4)
+    ok &= check("two rows: all, and the surviving subset", len(rb) == 2)
+    ok &= check("the subset keeps exactly the high-IoU bases",
+                rb.n_bases.tolist() == [N_BASES, N_BASES // 2],
+                f"{rb.n_bases.tolist()}")
+    ok &= check("a global judge stays at AUROC ~0.5 on both subsets",
+                bool((rb.auroc.sub(0.5).abs() < 0.05).all()),
+                f"{rb.auroc.round(3).tolist()}")
+    ok &= check("a threshold below every score keeps every base",
+                drift_robustness(dd_glob, str(drift_csv), 0.0)
+                .n_bases.tolist() == [N_BASES, N_BASES])
+
+    r2 = subprocess.run(
+        [sys.executable, "-m", "src.stage4_analyze",
+         "--scores", str(tmp / "scores_shard_*.parquet"),
+         "--out", str(outdir), "--drift-csv", str(drift_csv),
+         "--min-edge-iou", "0.4"],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        capture_output=True, text=True,
+    )
+    if r2.returncode != 0:
+        print(r2.stdout[-2000:])
+        print(r2.stderr[-2000:])
+    ok &= check("--drift-csv runs end to end", r2.returncode == 0)
+    ok &= check("wrote drift_robustness.csv",
+                (outdir / "drift_robustness.csv").exists())
+
+    print()
+    print("=" * 68)
     print("ALL PASS" if ok else "FAILURES ABOVE")
     print("=" * 68)
     return 0 if ok else 1
