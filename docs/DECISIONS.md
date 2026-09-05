@@ -174,7 +174,12 @@ to pre-empt the question, not a caveat.
 
 Testing this was made possible by deleting an `assert isinstance(coco, COCO)`
 whose only effect was to force a `pycocotools` import into the one function
-carrying the real risk. Still unverified: `annToMask`.
+carrying the real risk.
+
+`annToMask` was the last unverified path and is now exercised: `scripts/stage0.sh`
+on train2017 (2026-09-05) decoded 476 real COCO polygons into masks across 150
+bases, and every one of them survived the round trip through stage 1's
+resolution check.
 
 ### Instruction design changed 2026-09-04, in three ways
 

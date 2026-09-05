@@ -81,7 +81,7 @@ five VMs.**
 | Qwen3-VL accepts video | `limit_mm_per_prompt` **must** carry `"video": 0`, or vLLM sizes the encoder cache for a max-length video and OOMs. |
 | 16.8GiB of weights on a 20.16GiB budget | `load_engine` runs **eager**, `max_num_batched_tokens=2048`, `max_model_len=4096`. |
 | KV cache is 0.70GiB = 5,072 tokens | The judge is effectively serial. **This does not matter, and a 4B judge does not fix it.** |
-| No shared FS | Corrupted variants are **regenerated per-VM**, never transferred. Only ~450MB of base edits moves, once, via HF Hub. |
+| No shared FS | Corrupted variants are **regenerated per-VM**, never transferred. Only 146MB of base edits moves, once, via HF Hub. |
 | No sudo | `opencv-python-headless` — the normal build needs `libGL.so.1` via apt. Never swap it. |
 | 90G disk | VMs are **role-specialised**: the editor VM holds the diffusion model, judge VMs hold judges. Never both. **Do not set `HF_HOME`.** |
 | `/dev/shm` | Scratch for regenerated variants. Nothing large goes on `/`. |
@@ -177,26 +177,31 @@ requirements-{judge,editor,coco}.txt   role add-ons, each -r requirements.txt
 
 ## Current state
 
-**The full pipeline runs end to end on real data** (2026-08-26,
-`mcvgpu2025s-0050`): stage 0 -> 1 -> manifest -> 2 -> 3 -> 4, 100 base specs,
-5 edited, 75 pilot variants rendered, judged and analysed. Parse rate 100%,
-region coverage 100%. **The go/no-go pilot returned GO** — see
-[`docs/FINDINGS.md`](docs/FINDINGS.md).
+**Stage 1 is done and the tarball is published** (2026-09-05,
+`mcvgpu2025s-0004`): 150 train2017 bases, 476 regions, edited in 8h53m at
+213.1s each, every `edit.png` at source resolution, every instruction hash
+fresh. `mcv-spatial-audit/mcv-spatial-audit` on the Hub, `bases.tar.gz`, 146MB,
+public, carrying `bases.json`, `stage1_provenance.json` and `edit_drift.csv`.
+**Nothing downstream is blocked.** The `main` run is the next thing to happen.
+
+Not yet done from that tarball: nobody has downloaded it, unpacked it and built
+a manifest from it. `build_manifest` should yield 150 bases; that is inference
+until someone runs it.
+
+**The full pipeline ran end to end once before this** (2026-08-26,
+`mcvgpu2025s-0050`): stage 0 -> 1 -> manifest -> 2 -> 3 -> 4 on 100 base specs,
+5 edited, 75 pilot variants judged and analysed. Parse rate 100%, region
+coverage 100%. **The go/no-go pilot returned GO** — see
+[`docs/FINDINGS.md`](docs/FINDINGS.md). Those base ids are dead: the split
+changed and every id changed with it.
 
 All five test suites pass on the laptop. Cross-VM determinism is confirmed on
 **four of five VMs** (`0050`, `0043`, `0053`, `0004`), all printing
 `776feeddd281fa726195bf504c7b19c8`.
 
-**Stage 1 is done** (2026-09-05, `mcvgpu2025s-0004`): 150 bases edited in
-8h53m at 213.1s each, every `edit.png` at source resolution, every instruction
-hash fresh. The tarball is published and downstream is unblocked:
-`mcv-spatial-audit/mcv-spatial-audit` on the Hub, `bases.tar.gz`, 146MB,
-public, carrying `bases.json`, `stage1_provenance.json` and `edit_drift.csv`.
-
 **Outstanding:**
 
 - Determinism hash from the last VM. This is the only unreported verification.
-- `annToMask` in stage 0 has never been exercised.
 - The nuisance/exploitability sweep has never run on a GPU. The one thing that
   could still invalidate the `shuffle` axis is whether vLLM/xgrammar accepts a
   permuted `prefixItems` schema at all.

@@ -158,7 +158,8 @@ wget -q -P data/coco/train2017 -i /tmp/urls.txt      # ~200 files, ~30MB
 ```
 
 val2017 (5,000 images) yields only ~46 bases under the category-uniqueness
-rule, so **use train2017** — 118,287 images at the same rate is ~1,090. The
+rule, so **use train2017** — `--survey` measures 1,372 qualifying images there,
+against the 150 `main` needs. The
 train/val distinction carries no meaning here: this audit trains nothing, and
 both splits are equally public to the models involved.
 

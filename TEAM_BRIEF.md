@@ -33,7 +33,7 @@ assumption four papers rest on, or we find a hole in it.
 **Why the pipeline looks the way it does.** Our five VMs can't share files and
 have small disks, so we can't pass gigabytes of damaged images around. But
 damaging a region is *deterministic* — same image, same mask, same seed, same
-bytes out. So each VM regenerates only its own share locally. Only ~450MB of
+bytes out. So each VM regenerates only its own share locally. Only 146MB of
 edited images ever moves between machines, once, at the start.
 
 That only works if every machine produces **byte-identical** damage. Hence the
