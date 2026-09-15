@@ -139,6 +139,54 @@ def exploit_table(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def exploit_split(df: pd.DataFrame, w_by_col: dict,
+                  failed_below: float) -> pd.DataFrame:
+    """The exploit gain, split by WHERE the region is and whether its edit FAILED.
+
+    Clean controls only: the scenario is an edit that already went wrong (the
+    car came out blue, not red) with no corruption added, and the question is
+    whether a change that fixes nothing raises that region's score. "Failed" is
+    the judge's own baseline `sc_success` below `failed_below` -- not circular
+    here, because a policy trained on this reward climbs the judge's number,
+    not the truth.
+
+    `where` separates the two exploit mechanisms. Under `enhance` (global) the
+    target is just a designated region and target == other is expected. Under
+    `enhance_target`, a target gain above other's on `phi` means the judge can
+    be flattered locally; equal gains mean the lift acts through the whole
+    image. `n_bases` is the effective sample -- regions within one photograph
+    are not independent.
+    """
+    succ = paired(usable(df, "sc_success"), "sc_success")
+    if BASE not in succ.columns:
+        return pd.DataFrame()
+    base_success = succ[BASE].rename("base_success")
+    v = df.drop_duplicates("variant_id").set_index("variant_id")
+    rows = []
+    for mode in EXPLOIT_AXES:
+        for col, w in w_by_col.items():
+            if mode not in w.columns:
+                continue
+            p = w[[BASE, mode]].dropna().join(base_success).dropna().reset_index()
+            p = p[(p.scored_region_id != BG)
+                  & p.variant_id.map(v.is_control).astype(bool)]
+            if p.empty:
+                continue
+            tgt = p.variant_id.map(v.target_region_id).astype(str)
+            p["where"] = np.where(p.scored_region_id.astype(str) == tgt,
+                                  "target", "other")
+            p["edit"] = np.where(p.base_success < failed_below, "failed", "ok")
+            p["gain"] = p[mode] - p[BASE]
+            p["base_id"] = p.variant_id.map(v.base_id)
+            for (where, edit), g in p.groupby(["where", "edit"]):
+                rows.append(dict(presentation=mode, readout=col, where=where,
+                                 edit=edit, n=len(g),
+                                 n_bases=int(g.base_id.nunique()),
+                                 mean_gain=float(g.gain.mean()),
+                                 frac_rose=float((g.gain > 0).mean())))
+    return pd.DataFrame(rows)
+
+
 def coverage(df: pd.DataFrame) -> pd.DataFrame:
     """Did the judge answer at all, per condition.
 
@@ -170,6 +218,10 @@ def main() -> int:
     ap.add_argument("--col", default="reward", choices=READOUTS,
                     help="headline readout for the nuisance table "
                          "(default: reward, Equation 3)")
+    ap.add_argument("--failed-below", type=float, default=20.0,
+                    help="baseline sc_success (0-25) below which a region's edit "
+                         "counts as failed in the exploit split. A knob, not a "
+                         "measured cut; the table prints n and n_bases per cell")
     a = ap.parse_args()
 
     out = Path(a.out)
@@ -259,6 +311,7 @@ def main() -> int:
 
     print("\n=== EXPLOITABILITY: can the score be pushed UP for free? ===")
     print("  enhance is a global cosmetic lift; no edit is improved by it.")
+    print("  enhance_target is the same lift inside the target region's box only.")
     print("  reward carries AES = min(PQ), an image-level factor; phi does not.")
     ex = exploit_table(greedy, w_by_col)
     if len(ex):
@@ -271,6 +324,24 @@ def main() -> int:
                   "learns the trick.")
     else:
         print("  n/a -- no exploitability condition in this glob")
+
+    print("\n=== EXPLOIT on clean edits: failed vs ok, target vs other ===")
+    print(f"  failed = baseline sc_success below {a.failed_below:g}. n_bases is the")
+    print("  effective sample; regions within one photo are not independent.")
+    split = exploit_split(greedy, w_by_col, a.failed_below)
+    if len(split):
+        print(split.round(4).to_string(index=False))
+        split.to_csv(out / "exploit_split.csv", index=False)
+        s = split.set_index(["presentation", "readout", "where", "edit"]).mean_gain
+        k = ("enhance_target", "phi")
+        if k + ("target", "failed") in s.index and k + ("other", "failed") in s.index:
+            t, o = s[k + ("target", "failed")], s[k + ("other", "failed")]
+            print(f"\n  enhance_target on FAILED edits: phi {t:+.4f} on the lifted "
+                  f"region, {o:+.4f} elsewhere.")
+            print("  A gap means the judge is flattered locally; no gap means the "
+                  "lift acts on the whole image.")
+    else:
+        print("  n/a -- needs a baseline with sc_success and an exploit condition")
 
     print(f"\nwrote {out}")
     return 0

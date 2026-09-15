@@ -555,7 +555,8 @@ and one that reacts at random, and only the tie rate separates those.
 
 ## Nuisance and exploitability
 
-Implemented 2026-09-04. Laptop-verified, never run on a GPU.
+Implemented 2026-09-04. First GPU run 2026-09-15 on `mcvgpu2025s-0043`, pilot
+profile; results in [`FINDINGS.md`](FINDINGS.md).
 
 Both analyses ask what the score does when something changes that carries **no
 information about edit quality**.
@@ -581,6 +582,21 @@ before this existed.
 | `box` | bboxes drawn on **both** images | nuisance, visual |
 | `noimg` | every image stripped | exploitability |
 | `enhance` | global unsharp + contrast + saturation on the edit only | exploitability |
+| `enhance_target` | the same lift, inside the target region's bbox only | exploitability |
+
+`enhance_target` was added 2026-09-15. `enhance` alone cannot tell the two ways
+a cosmetic lift can pay apart: through the image-level AES factor, which raises
+every region, or by flattering one region locally, which raises only its own
+`phi`. The report splits both exploit axes by target vs other region and by
+whether the judge's own baseline `sc_success` called the edit failed
+(`--failed-below`, default 20), on clean controls only. "Failed by the judge's
+own score" is the right definition here, not a circular one: an RL policy
+climbs the judge's number, not the truth. The lift is computed on the whole
+frame and then cropped to the box, so the unsharp mask sees real neighbours at
+the edge. A gradient attack was considered and rejected for this deadline: vLLM
+exposes no gradients, the score is digit tokens after free-form reasoning with
+no clean objective, and the 8B already needs a hand-tuned memory window forward
+only.
 
 Two orthogonal groupings, and the distinction matters: TEXT/IMAGE is about the
 **stimulus** (does a pixel change?), NUISANCE/EXPLOIT is about the **claim** (a
@@ -691,15 +707,19 @@ Verified on the laptop, 2026-09-04 (`tests/test_nuisance.py`, 16 checks):
   exactly 0, a nuisance-sensitive one reports `vs_damage > 1`, and an AES
   exploit raises `reward` while `phi` stays flat.
 
-Only a judge VM can settle these:
+Settled on a judge VM, 2026-09-15 (`0043`, pilot, 160 requests per condition):
 
-- Whether vLLM/xgrammar accepts a permuted `prefixItems` schema at all. This is
-  the one thing that could still invalidate the `shuffle` axis.
-- Grammar compile cost when `shuffle` turns one schema per base into up to n!.
-  `_sc_schema_cached` is `lru_cache(maxsize=64)` (`judge_prompt.py:197`); fine at
-  5 bases, a thrash hazard at `main` scale.
-- Cross-VM equality of `enhance`/`box`. Deliberately untested; see above.
-- Every actual score.
+- **vLLM/xgrammar accepts a permuted `prefixItems` schema.** `shuffle` parsed
+  100% with full region coverage. The axis is valid.
+- **Grammar compile cost at pilot scale is not a problem.** `shuffle` took 9 min
+  wall-clock including engine startup, the same as the unshuffled axes. Still a
+  thrash hazard at `main` scale (`lru_cache(maxsize=64)`,
+  `judge_prompt.py:197`), untested there.
+
+Still open:
+
+- Cross-VM equality of `enhance`/`box`/`enhance_target`. Deliberately untested;
+  see above.
 
 ---
 

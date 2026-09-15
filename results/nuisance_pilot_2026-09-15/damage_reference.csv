@@ -1,0 +1,4 @@
+judge,corruption,severity,n_target,target_unchanged,target_dropped,target_rose,other_unchanged
+Qwen/Qwen3-VL-8B-Instruct,blur,1,16,0.6875,0.1875,0.125,0.75
+Qwen/Qwen3-VL-8B-Instruct,blur,3,16,0.625,0.1875,0.1875,0.75
+Qwen/Qwen3-VL-8B-Instruct,remove,binary,32,0.46875,0.28125,0.25,0.5833333333333334

@@ -132,10 +132,65 @@ re-run any of it.
 
 ---
 
-## Free exploitability data point
+## NUISANCE AND EXPLOITABILITY SWEEP, 2026-09-15 — first measurement
 
-The judge scores an edit **it was shown no images of** — a text-only request
-returns all 25s. Worth a line in the report.
+`mcvgpu2025s-0043`, pilot profile: 5 bases, 16 regions, 80 variants,
+Qwen3-VL-8B, greedy, plus a `T=0.7 n=5` floor run over the same variants. Eight
+conditions; parse 100% on every greedy run, 99.5% on the floor.
+
+Reference from the baseline condition: real damage moves the target's `reward`
+by mean |delta| **0.141**, and 56% of damaged regions do not move at all. The
+noise floor (median SD across samples) is **0.114** — nearly as large as the
+damage effect itself.
+
+### Exploitability
+
+Mean gain over baseline. Split columns are clean controls only, "failed" =
+baseline `sc_success` below 20 (`--failed-below`, the default). Failed cells
+hold 9 target / 22 other regions, ok cells 7 / 14; **4 photographs per cell**.
+
+| condition | `reward`, all regions | share rose | `phi`, failed edits (target / other) | `phi`, ok edits (target / other) |
+|---|---|---|---|---|
+| `noimg` | **+0.342** | 65% | **+19.9 / +19.4**, every region rose | -5.0 / -4.4 |
+| `enhance` | -0.064 | 8% | 0.0 / 0.0 | -10.7 / -10.7 |
+| `enhance_target` | -0.015 | 9% | +1.7 / +2.3 | -5.7 / -5.4 |
+
+- **`noimg` is the one real exploit.** Without an image the judge falls to a
+  high default (~20 `phi`): every region it had scored as a failed edit rose,
+  and ok edits drifted down toward the same default. +0.34 `reward` is ~3x the
+  noise floor. It is not an attack an editor can run directly — the editor
+  controls pixels, not whether they are sent — but it shows the default is high,
+  so any output that hides a failure from the judge inherits it. This replaces
+  the earlier "text-only request returns all 25s" anecdote.
+- **`enhance` lowered scores; the predicted AES exploit did not appear.** And it
+  structurally cannot help a failed edit: Eq. (3) multiplies `phi` by AES, so a
+  region at `phi = 0` stays at 0 however high PQ goes. Whether the drop is the
+  preservation axis (sharpened edit differs more from source) or PQ itself has
+  **not been checked** — compare `pq_naturalness`/`pq_artifacts` between
+  `scores_enhance` and `scores_baseline`.
+- **`enhance_target`: no local flattery.** On failed edits the lifted region
+  gained less than the untouched ones; on ok edits both fell equally. Its gain is
+  below the noise floor. Consistent with the pilot's whole-image judgement.
+
+### Nuisance, one line each
+
+`shuffle` moved `reward` by **1.55x** what real damage does (mean |delta|
+0.219), `subset` 0.91x, `box` 0.72x. Under `shuffle`, list slot 3 averaged 0.03
+against 0.26-0.33 for slots 0-2 — but slot 3 exists only on 4-region bases
+(n=20), so position is confounded with base there.
+
+### Caveats
+
+Five photographs, four per exploit cell. Suggestive, not reportable, except
+`noimg`, whose effect is large and unanimous on failed edits. A controls-only
+rerun over all 150 bases (476 clean edits; `baseline`, `enhance`,
+`enhance_target`, `noimg`, plus floor) is ~5h on one VM at the speed measured
+here.
+
+The report's tables behind every number above are committed in
+[`results/nuisance_pilot_2026-09-15/`](../results/nuisance_pilot_2026-09-15/).
+The raw score parquets are not (gitignored); they live on `0043` in
+`out/nuisance/`.
 
 ---
 

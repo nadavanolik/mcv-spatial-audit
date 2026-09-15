@@ -1,6 +1,6 @@
 # Team brief
 
-Updated 2026-09-04. Start here — this is the plain-language version.
+Updated 2026-09-15. Start here — this is the plain-language version.
 Setup commands, repo structure and constraints live in [`README.md`](README.md).
 
 ---
@@ -120,6 +120,25 @@ copied into each region slot** — exactly the failure we set out to look for.
 convincing, but five images is a pilot, not a result. The full run uses 150
 images and gives ~32× the data. Nobody should quote these numbers as final.
 
+### What the "can it be fooled" test found (2026-09-15)
+
+Same idea, other direction: change something that does NOT make an edit better,
+and see if the score goes up anyway. Five photos, judged eight ways on one VM.
+
+- **Hiding the picture works.** Every region the judge had marked as a failed
+  edit got a much better score when we sent no picture at all — from near zero to
+  about 20 out of 25. Without an image, the judge just writes a high default.
+- **Making the picture prettier does not.** Sharpening the whole edit lowered
+  scores. Sharpening only the region we wanted scored up moved the other regions
+  just as much — the judge can't be flattered one region at a time, which fits
+  the pilot: it judges the whole image at once.
+- **The order we list regions in matters.** Shuffling the list moved scores more
+  than actually damaging a region did.
+
+Same caveat: five photos. The "hide the picture" result is big enough to trust;
+the rest is a first look. Rerunning just the fooling test on all 150 photos is
+about five hours overnight on one VM.
+
 ---
 
 ## YOUR MISSIONS
@@ -162,7 +181,7 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 | Role | Where it stands | Next |
 |---|---|---|
 | **Editor VM** | done - 150 photos edited and published as `bases.tar.gz` | Nothing blocking. The VM still holds FLUX, so it is the one to use if any base ever needs re-editing |
-| **Judge harness** | working, 100% parse, real published prompt, sampling decided | Nothing blocking. Run the nuisance sweep on the first VM that gets the photos — ~1h, no coordination needed |
+| **Judge harness** | working, 100% parse, real published prompt, sampling decided | Nuisance + exploitability sweep done 2026-09-15 on 5 photos (results above). Optional: rerun on all 150, ~5h on one VM. `0043` already has the photos and the judge |
 | **Corruption + manifest** | determinism confirmed on 4 of 5 VMs | Chase the last one. Own `config.yaml` |
 | **Analysis** | stage 4 runs on real data | Start the figures. The tie-rate and coherence tables are the headline ones, not AUROC |
 | **Second judge** | Qwen3-VL-4B downloaded and working | Pick a second *family*, not just a second size, and justify it |
@@ -304,8 +323,8 @@ caught it.
 
 - **Week 1 — done.** Setup, pipeline verified, pilot, go/no-go. Verdict GO.
 - **Week 2** — 150 images edited and shipped; manifest frozen; main run.
-- **Week 3** — second judge family; run the nuisance + exploitability sweep
-  (the code is written; it needs an hour on a machine that has the photos).
+- **Week 3** — second judge family. The nuisance + exploitability sweep is done
+  (2026-09-15, 5 photos).
 - **Week 4** — figures, LaTeX, repo cleanup.
 - **Week 5** — buffer and the 5-minute talk. Don't plan work here.
 

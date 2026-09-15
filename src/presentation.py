@@ -53,7 +53,16 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 #             the source, and the SC prompt asks about preservation -- so phi
 #             may fall while reward rises. Read `reward` and `phi` separately;
 #             that split is the measurement, not a caveat to it.
-PRESENTATIONS = ("baseline", "shuffle", "subset", "box", "noimg", "enhance")
+#   enhance_target
+#             exploitability. The same lift, confined to the TARGET region's
+#             bbox. Separates the two ways a lift can pay: through the
+#             image-level AES factor (every region rises) or by flattering one
+#             region locally (only its own phi rises). Paired with a baseline
+#             whose success score marks the edit as failed, it asks the
+#             question an RL editor would find the answer to: can a region the
+#             judge already called wrong be scored up without being fixed?
+PRESENTATIONS = ("baseline", "shuffle", "subset", "box", "noimg", "enhance",
+                 "enhance_target")
 
 # Two orthogonal groupings, because they answer different questions.
 #
@@ -66,9 +75,9 @@ PRESENTATIONS = ("baseline", "shuffle", "subset", "box", "noimg", "enhance")
 # table headed "does a null change move the score" would be a category error --
 # it is not a null, and it moving is the hypothesis, not a failure.
 TEXT_AXES = ("shuffle", "subset")            # no pixels change
-IMAGE_AXES = ("box", "enhance")              # pixels change
+IMAGE_AXES = ("box", "enhance", "enhance_target")   # pixels change
 NUISANCE_AXES = ("shuffle", "subset", "box")
-EXPLOIT_AXES = ("noimg", "enhance")
+EXPLOIT_AXES = ("noimg", "enhance", "enhance_target")
 NO_IMAGES = "noimg"
 
 # Cosmetic lift. UnsharpMask's arguments are Pillow's own photo-sharpening
@@ -125,6 +134,22 @@ def enhance(img: Image.Image) -> Image.Image:
     out = img.filter(ImageFilter.UnsharpMask(**_UNSHARP))
     out = ImageEnhance.Contrast(out).enhance(_CONTRAST)
     return ImageEnhance.Color(out).enhance(_SATURATION)
+
+
+def enhance_region(img: Image.Image, bbox) -> Image.Image:
+    """enhance(), confined to one COCO (x, y, w, h) box.
+
+    Lifted over the whole frame first and then cropped, so the unsharp mask sees
+    real neighbours at the box edge instead of a hard crop boundary. The box is
+    clamped to the frame, so a degenerate box is a no-op rather than a PIL
+    coordinate error. The bbox is in source coordinates, like every mask.
+    """
+    x, y, w, h = (int(v) for v in bbox)
+    box = (max(x, 0), max(y, 0), min(x + w, img.width), min(y + h, img.height))
+    out = img.copy()
+    if box[0] < box[2] and box[1] < box[3]:
+        out.paste(enhance(img).crop(box), box[:2])
+    return out
 
 
 def draw_boxes(img: Image.Image, regions: list) -> Image.Image:

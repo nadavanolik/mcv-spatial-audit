@@ -23,7 +23,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.judge_prompt import region_reward, sc_json_schema      # noqa: E402
 from src.presentation import (PRESENTATIONS, draw_boxes, enhance,  # noqa: E402
-                              present)
+                              enhance_region, present)
 from src.schema import variant_id                              # noqa: E402
 from src.stage3_judge import build_requests                    # noqa: E402
 
@@ -101,7 +101,7 @@ def test_subset_accepts_a_string_target():
 def test_baseline_is_the_identity():
     vid = variant_id("b0", 0, "blur", 1, "full")
     assert present(REGIONS, 0, vid, "baseline") == REGIONS
-    for mode in ("noimg", "enhance", "box"):
+    for mode in ("noimg", "enhance", "enhance_target", "box"):
         assert [r["region_id"] for r in present(REGIONS, 0, vid, mode)] == IDS
 
 
@@ -145,6 +145,22 @@ def test_enhance_is_global():
              d[h // 2:, :w // 2], d[h // 2:, w // 2:]]
     touched = [float((q > 0).mean()) for q in quads]
     assert min(touched) > 0.5, "enhance is not global: %s" % (touched,)
+
+
+def test_enhance_region_is_local():
+    """The targeted exploit's claim is the opposite of enhance's: it touches the
+    named region and nothing else. A leak outside the box would turn a local
+    flattery test back into a global one."""
+    im = _img(4)
+    x, y, w, h = REGIONS[0]["bbox"]
+    d = np.abs(np.asarray(enhance_region(im, REGIONS[0]["bbox"]), int)
+               - np.asarray(im, int)).sum(2)
+    assert (d[y:y + h, x:x + w] > 0).mean() > 0.5, "nothing lifted inside the box"
+    d[y:y + h, x:x + w] = 0
+    assert d.max() == 0, "enhance_region leaked outside its box"
+    # a box off the frame is a no-op, not a PIL coordinate error
+    off = enhance_region(im, [250, 250, 10, 10])
+    assert off.tobytes() == im.tobytes() and off.size == im.size
 
 
 def test_draw_boxes_marks_only_the_presented_regions():
@@ -281,6 +297,21 @@ def test_build_requests_under_every_presentation():
         e_src = [c for c in e_msgs[0][0]["content"] if c["type"] == "image_pil"][0]
         assert b_src["image_pil"].tobytes() == e_src["image_pil"].tobytes(), \
             "enhance modified the source; only the edit is the editor's output"
+
+        # enhance_target, through the real request path: the target's box
+        # changes, nothing else in the edit does, and the source is untouched.
+        t_msgs, _ = build_requests(one, bases, variants, "enhance_target")
+        b_im = [c for c in b_msgs[0][0]["content"] if c["type"] == "image_pil"]
+        t_im = [c for c in t_msgs[0][0]["content"] if c["type"] == "image_pil"]
+        assert b_im[0]["image_pil"].tobytes() == t_im[0]["image_pil"].tobytes(), \
+            "enhance_target modified the source"
+        d = np.abs(np.asarray(t_im[1]["image_pil"], int)
+                   - np.asarray(b_im[1]["image_pil"], int)).sum(2)
+        x, y, w, h = REGIONS[int(one.iloc[0].target_region_id)]["bbox"]
+        assert (d[y:y + h, x:x + w] > 0).mean() > 0.5, \
+            "enhance_target did not lift the target box"
+        d[y:y + h, x:x + w] = 0
+        assert d.max() == 0, "enhance_target touched pixels outside the target box"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -288,7 +319,8 @@ def test_build_requests_under_every_presentation():
 # --- scripts/nuisance_report.py, against judges with known behaviour ---------
 
 def _fake_scores(nuisance: float, pq_baseline=20.0, pq_enhance=25.0,
-                 damage=2.0, jitter=0.0, n_samples=1, presentations=None):
+                 damage=2.0, jitter=0.0, n_samples=1, presentations=None,
+                 target_lift=0.0, failed_bases=()):
     """Score rows in stage 3's exact output schema, for a judge whose response
     to each presentation we choose.
 
@@ -296,7 +328,9 @@ def _fake_scores(nuisance: float, pq_baseline=20.0, pq_enhance=25.0,
     judge that only reacts to content; a large value is one whose per-region
     number is partly about word order. `damage` is how far the targeted
     region's score falls when we actually corrupt it -- the thing the nuisance
-    is measured against.
+    is measured against. `target_lift` raises only the target region under
+    `enhance_target` (a locally flatterable judge); bases in `failed_bases`
+    start at a score the report's default threshold calls a failed edit.
     """
     import pandas as pd
     presentations = presentations or ["baseline", "shuffle", "enhance"]
@@ -311,9 +345,11 @@ def _fake_scores(nuisance: float, pq_baseline=20.0, pq_enhance=25.0,
                     pq = pq_enhance if pres == "enhance" else pq_baseline
                     for s in range(n_samples):
                         for slot, rid in enumerate(IDS + ["bg"]):
-                            phi = 20.0
+                            phi = 10.0 if bid in failed_bases else 20.0
                             if not ctrl and str(rid) == str(target):
                                 phi -= damage
+                            if pres == "enhance_target" and str(rid) == str(target):
+                                phi += target_lift
                             if pres == "shuffle":
                                 phi += nuisance
                             phi += rng.normal(0, jitter) if jitter else 0.0
@@ -334,17 +370,18 @@ def _fake_scores(nuisance: float, pq_baseline=20.0, pq_enhance=25.0,
     return pd.DataFrame(rows)
 
 
-def _run_report(tmp: Path, nuisance: float) -> dict:
+def _run_report(tmp: Path, nuisance: float, **kw) -> dict:
     import subprocess
     import pandas as pd
     nd = tmp / "nuisance"
     nd.mkdir(parents=True, exist_ok=True)
-    df = _fake_scores(nuisance)
+    df = _fake_scores(nuisance, **kw)
     for pres, g in df.groupby("presentation"):
         g.to_parquet(nd / ("scores_%s.parquet" % pres))
     # the floor run: baseline packaging, repeated samples, real spread
-    _fake_scores(nuisance, jitter=0.4, n_samples=3,
-                 presentations=["baseline"]).to_parquet(nd / "floor_baseline.parquet")
+    _fake_scores(nuisance, jitter=0.4, n_samples=3, presentations=["baseline"],
+                 failed_bases=kw.get("failed_bases", ())
+                 ).to_parquet(nd / "floor_baseline.parquet")
 
     out = tmp / "report"
     r = subprocess.run(
@@ -406,6 +443,25 @@ def test_report_catches_the_aes_exploit():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_report_splits_a_local_flatterer_on_failed_edits():
+    """A judge that raises ONLY the lifted region must show the lift on
+    target/failed and exactly nothing on other/failed. A split that pooled
+    target with other, or failed with ok, would dilute the targeted exploit
+    toward zero and report a judge that can be gamed as one that cannot."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        csv = _run_report(tmp, nuisance=0.0, target_lift=4.0, failed_bases=("b0",),
+                          presentations=["baseline", "enhance_target"])
+        s = csv["exploit_split"].set_index(["presentation", "readout", "where", "edit"])
+        k = ("enhance_target", "phi")
+        assert s.loc[k + ("target", "failed"), "mean_gain"] == 4.0
+        assert s.loc[k + ("other", "failed"), "mean_gain"] == 0.0
+        assert s.loc[k + ("target", "failed"), "n_bases"] == 1
+        assert s.loc[k + ("target", "ok"), "n_bases"] == 2
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 TESTS = [test_shuffle_is_a_permutation, test_shuffle_is_deterministic,
          test_shuffle_varies_across_variants,
          test_subset_keeps_the_target_and_drops_one,
@@ -413,12 +469,14 @@ TESTS = [test_shuffle_is_a_permutation, test_shuffle_is_deterministic,
          test_subset_accepts_a_string_target, test_baseline_is_the_identity,
          test_schema_slots_follow_the_presented_order,
          test_enhance_is_deterministic_and_changes_pixels, test_enhance_is_global,
+         test_enhance_region_is_local,
          test_draw_boxes_marks_only_the_presented_regions,
          test_reward_rises_with_pq_at_fixed_phi,
          test_build_requests_under_every_presentation,
          test_report_clears_a_nuisance_immune_judge,
          test_report_catches_a_nuisance_sensitive_judge,
-         test_report_catches_the_aes_exploit]
+         test_report_catches_the_aes_exploit,
+         test_report_splits_a_local_flatterer_on_failed_edits]
 
 
 def main() -> int:

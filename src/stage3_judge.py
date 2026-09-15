@@ -31,7 +31,7 @@ from .judge_prompt import (build_sc_prompt, build_pq_prompt, parse_sc, parse_pq,
                            region_reward, sc_json_schema, pq_json_schema,
                            REASONING_MODES)
 from .presentation import (PRESENTATIONS, TEXT_AXES, present, enhance,
-                           draw_boxes)
+                           enhance_region, draw_boxes)
 from .schema import shard
 
 # 768^2 = 589,824. Chosen to be a no-op on our actual data while shrinking the
@@ -266,6 +266,13 @@ def build_requests(rows: pd.DataFrame, bases: Path, variants: Path,
         shown = present(regions, row.target_region_id, row.variant_id, presentation)
         if presentation == "enhance":
             edit = enhance(edit)          # the edit only: the source is the real photo
+        elif presentation == "enhance_target":
+            tgt = [r for r in regions
+                   if str(r["region_id"]) == str(row.target_region_id)]
+            if not tgt:
+                raise ValueError(f"{row.base_id}: target region "
+                                 f"{row.target_region_id} not in regions.json")
+            edit = enhance_region(edit, tgt[0]["bbox"])
         elif presentation == "box":
             src, edit = draw_boxes(src, shown), draw_boxes(edit, shown)
         pics = [] if presentation == "noimg" else [src, edit]

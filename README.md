@@ -226,7 +226,8 @@ python -m src.stage2_corrupt --manifest out/manifest.parquet \
     --bases data/bases --out /dev/shm/mcv/nuisance --shard 0 --of 1
 mkdir -p out/nuisance
 
-for P in baseline shuffle subset box noimg enhance; do
+# exploitability first, so its result is banked before the untested shuffle axis
+for P in baseline enhance enhance_target noimg shuffle subset box; do
   python -m src.stage3_judge --manifest out/manifest.parquet --bases data/bases \
       --variants /dev/shm/mcv/nuisance --shard 0 --of 1 --presentation "$P" \
       --temperature 0 --n-samples 1 --out "out/nuisance/scores_$P.parquet"

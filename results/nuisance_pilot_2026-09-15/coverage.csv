@@ -1,0 +1,8 @@
+presentation,rows,parse_rate,scored,reward
+baseline,260,1.0,1.0,1.0
+box,260,1.0,1.0,1.0
+enhance,260,1.0,1.0,1.0
+enhance_target,260,1.0,1.0,1.0
+noimg,260,1.0,1.0,1.0
+shuffle,260,1.0,1.0,1.0
+subset,180,1.0,1.0,1.0

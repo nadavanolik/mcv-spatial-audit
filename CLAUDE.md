@@ -142,7 +142,7 @@ Every number above was measured; the derivations are in
 src/schema.py           manifest schema, variant_id, seed derivation, hash sharding
 src/corruptions.py      5 seeded feathered degradations (determinism-critical)
 src/judge_prompt.py     A.4.3 prompt verbatim, JSON schemas, Eq. (3) reward
-src/presentation.py     6 nuisance/exploitability packaging axes, applied in RAM
+src/presentation.py     7 nuisance/exploitability packaging axes, applied in RAM
 src/stage0_coco.py      COCO instance-seg filter -> multi-region base specs
 src/stage1_edit.py      FLUX Kontext editing, sequential offload  [EDITOR VM ONLY]
 src/build_manifest.py   expand base specs into the design matrix
@@ -184,9 +184,9 @@ fresh. `mcv-spatial-audit/mcv-spatial-audit` on the Hub, `bases.tar.gz`, 146MB,
 public, carrying `bases.json`, `stage1_provenance.json` and `edit_drift.csv`.
 **Nothing downstream is blocked.** The `main` run is the next thing to happen.
 
-Not yet done from that tarball: nobody has downloaded it, unpacked it and built
-a manifest from it. `build_manifest` should yield 150 bases; that is inference
-until someone runs it.
+Downloaded, unpacked and built into a pilot manifest on `mcvgpu2025s-0043`
+(2026-09-15): `bases.json` holds 150 bases, pilot takes 5 with 16 regions -> 80
+variants, all 80 rendered by stage 2 and built into requests by `--dry-run`.
 
 **The full pipeline ran end to end once before this** (2026-08-26,
 `mcvgpu2025s-0050`): stage 0 -> 1 -> manifest -> 2 -> 3 -> 4 on 100 base specs,
@@ -202,9 +202,11 @@ All five test suites pass on the laptop. Cross-VM determinism is confirmed on
 **Outstanding:**
 
 - Determinism hash from the last VM. This is the only unreported verification.
-- The nuisance/exploitability sweep has never run on a GPU. The one thing that
-  could still invalidate the `shuffle` axis is whether vLLM/xgrammar accepts a
-  permuted `prefixItems` schema at all.
+- The nuisance/exploitability sweep ran once, on the pilot's 5 photos
+  (2026-09-15, `0043`): all 8 conditions parse 100%, and xgrammar accepts the
+  permuted schema. Results in [`docs/FINDINGS.md`](docs/FINDINGS.md). Too few
+  photos to be reportable except `noimg`; a controls-only rerun on 150 bases is
+  ~5h on one VM.
 - Whether the judge reads `score_preserve` as preservation or as overediting —
   the open question in [`docs/DECISIONS.md`](docs/DECISIONS.md). Settle it by
   measurement on the pilot parquet, not by re-reading the paper.
@@ -226,11 +228,8 @@ All five test suites pass on the laptop. Cross-VM determinism is confirmed on
    train2017 image ids; anything from the pilot is dead data.
 2. Cross-VM determinism hash from the one VM that has not reported it.
 3. `main`: 150 bases, **~1.7h/VM** at greedy, sharded five ways.
-4. The nuisance/exploitability sweep: ~1h on **one** VM that has `data/bases` and
-   a judge checkpoint. Independent of `main` and of which photographs it uses, so
-   it can run the moment any VM has bases. Run `--dry-run` on real bases first —
-   30 seconds, no GPU — since the only untested assumption left is the shape of a
-   real `regions.json`.
+4. ~~The nuisance/exploitability sweep on one VM.~~ **Done 2026-09-15** on the
+   pilot's 5 photos, `0043`, 8 conditions including `enhance_target`.
 5. Pick and wire the second judge family (cross-family agreement is a finding).
    A 4B Qwen is a cross-scale comparison, not a second family.
 6. Figures for the report.
