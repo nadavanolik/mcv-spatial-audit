@@ -52,23 +52,30 @@ other four machines never came online, so one machine did all five shares; that'
 fine, the maths is identical either way.) Every response parsed.
 
 **What it found, in plain terms — the pilot was right, and now it's on 150 photos
-instead of 5:**
+instead of 5 (with two numbers corrected after we double-checked — see below):**
 
-1. **The judge usually doesn't notice the damage.** When we broke a region, its
-   score stayed *exactly the same* 48-77% of the time.
-2. **When a score does move, it's not the region we broke.** The damaged region
-   was no more likely to change than a region we never touched.
-3. **The judge grades the whole picture at once.** Either every region's score
-   moved together or none did — it singled out one region only 22% of the time,
-   where truly independent per-region grading would do it 68% of the time.
-4. **It cannot point at the damage.** The standard "which region was hit?" score
-   came out 0.51, where 0.50 is a coin flip — for every one of the five damage
-   types, including three (jpeg, noise, over-saturation) we'd never tested on real
-   photos before.
+1. **The judge DOES notice something is wrong overall.** Its whole-picture quality
+   score drops when we damage a region, and drops more for worse damage. So it can
+   see the damage — this rules out the boring explanation that it simply can't.
+2. **But it can't say WHICH region is damaged.** The region we broke was no more
+   likely to get a worse score than a region we never touched — in every damage
+   type.
+3. **The "which region was hit?" test comes out near a coin flip** (about
+   0.52–0.54, where 0.50 is chance), for all five damage types — including three
+   (jpeg, noise, over-saturation) we'd never tested on real photos before.
+4. **When scores do move, they mostly move together**, like one whole-picture
+   judgement rather than one region at a time.
 
-Put together: **the "per-region" score is one whole-image judgement copied into
-each region slot** — exactly the failure we set out to look for, now the finding
-and not just a hunch.
+Put together: **the judge sees the damage but files it as a single whole-image
+number — the "per-region" score doesn't actually carry per-region information.**
+That's exactly the failure we set out to look for, now the finding and not a hunch.
+
+**Two numbers we corrected after checking our own work** (so nobody quotes the old
+ones): the first pass said "48–77% of damaged regions don't move" and "regions
+move together 22% vs 68% of the time". Both were overstated — the first was
+inflated by regions the editor had already failed on (they can't drop further),
+the second by a quirk of the reward formula. The corrected story is the same, just
+honestly sized; details in `docs/FINDINGS.md`.
 
 **We also killed the main objection.** Our editing step sometimes re-arranges a
 scene, which could fake this result (see the layout note below). So we re-ran the

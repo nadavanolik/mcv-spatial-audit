@@ -157,6 +157,8 @@ scripts/verify_determinism.sh   cross-VM hash check
 scripts/smoke_judge.py  one real judge call on synthetic images  [JUDGE VM ONLY]
 scripts/smoke_edit.py   one real FLUX edit on a synthetic image  [EDITOR VM ONLY]
 scripts/diagnose_parse.py     why judge responses failed, from a parquet  [CPU]
+scripts/pq_response.py        does image-level PQ react to per-region damage? the
+                        perception control for a flat localization result  [CPU]
 scripts/verify_corruption.py  did the corruption damage the image, and only
                         inside the mask? [CPU] -- run before any insensitivity claim
 scripts/verify_edit_drift.py  did stage 1 keep the layout the masks describe?
@@ -186,18 +188,30 @@ public, carrying `bases.json`, `stage1_provenance.json` and `edit_drift.csv`.
 
 **The `main` run is DONE** (2026-09-18, `mcvgpu2025s-0050`): 150 bases, 476
 regions, 5,236 variants, all five corruptions, greedy, judged and analysed end
-to end on one VM (all five shards run serially in tmux — the disconnected
-teammates never materialised, and one VM at greedy is ~8.5h). Parse 100%, 22,176
-rows. **The per-region reward does not localise**: AUROC ~0.51 across every
-corruption and readout, 48-77% of damaged regions score identically to their
-clean control, only 22% of variants show mixed region movement against 68% under
-independence, redundancy R^2 0.52-0.56, and the layout-drift split
-(edge IoU >= 0.4, 96 bases) agrees so the confound does not drive it. `jpeg`,
-`noise`, `saturate` judged on real data for the first time and behave identically
-to `blur`/`remove`. Numbers and the raw score parquets are committed in
-`results/main_2026-09-18/`; the full account is in
-[`docs/FINDINGS.md`](docs/FINDINGS.md). What remains is the write-up, not the
-harness.
+to end on one VM (all five shards serial in tmux — the disconnected teammates
+never materialised, ~8.5h). Parse 100%, 22,176 rows. **Finding: the judge
+perceives the corruption but the per-region reward does not localise it.**
+Image-level PQ/AES falls monotonically with severity (noise s3 −2.7, remove −2.5,
+blur/jpeg s3 ~−1.7 on a between-base SD of 3.36), so a flat per-region result is
+about attribution, not perception. Per region: floor-excluded AUROC ~0.52-0.54,
+the damaged region no more likely to move than an untouched one (target ties ≈
+other ties in every cell), redundancy R^2 0.52 (`phi`), and whole-image
+co-movement on `phi` is 28% mixed vs 51% under independence. The layout-drift
+split (edge IoU >= 0.4, 96 bases) agrees, so the confound does not drive it.
+`jpeg`/`noise`/`saturate` judged on real data for the first time; behave like
+`blur`/`remove`.
+
+Two honesty corrections landed after a self-critique pass (2026-09-18) and are
+baked into those numbers: headline figures are **floor-excluded**
+(`--min-control 0` — 37% of deltas came from regions already at 0, guaranteed
+ties that inflate the tie rate and drag AUROC to 0.5), and **coherence is read on
+`phi`, not `reward`** (reward's shared AES factor mechanically co-moves regions;
+the first-pass 22%-vs-68% was AES-inflated). Scope limit to keep loud: base
+Qwen3-VL-8B + the A.4.3 prompt, **not** the fine-tuned SFReward model or its
+Gemini teacher. Numbers, raw parquets and `REPRODUCE.md` are in
+`results/main_2026-09-18/`; `scripts/pq_response.py` is the new perception check;
+full account in [`docs/FINDINGS.md`](docs/FINDINGS.md). What remains is the
+write-up, not the harness.
 
 Downloaded, unpacked and built into a pilot manifest on `mcvgpu2025s-0043`
 (2026-09-15): `bases.json` holds 150 bases, pilot takes 5 with 16 regions -> 80

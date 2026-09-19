@@ -16,52 +16,95 @@ greedy (`--temperature 0 --n-samples 1`), sharded five ways on one VM. Parse rat
 score parquets — every number below reproduces on a laptop with
 `python -m src.stage4_analyze --scores 'results/main_2026-09-18/scores_shard*.parquet' --all-readouts`.
 
-**The pilot finding held and sharpened. The per-region reward does not localise.**
-Everything the pilot saw on 5 photos now stands on 150, and the three corruptions
-never before judged on real data (`jpeg`, `noise`, `saturate`) behave exactly
-like `blur` and `remove`.
+**Headline: the judge perceives the corruption, but the per-region reward does not
+localise it.** Image-level quality reacts to the damage; the per-region scores do
+not attribute it to the corrupted region. Everything the pilot saw on 5 photos
+now stands on 150, and `jpeg`, `noise`, `saturate` — judged on real data for the
+first time — behave like `blur` and `remove`.
 
-### 1. The score usually does not move, and not on the damaged region
+Two honesty corrections are baked into the numbers below, both from self-critique
+after the first pass (an earlier version of this section overstated on both and is
+superseded):
 
-Tie rate (`delta == 0` exactly, greedy so not noise), target vs any other region:
+- **Floored regions are excluded** (`--min-control 0`). 37% of region-deltas came
+  from regions whose clean control already scored 0 (FLUX failed the edit); such
+  a region cannot drop when damaged, so it is a guaranteed tie that inflates the
+  tie rate and drags AUROC toward 0.5. Primary numbers are floor-excluded; the
+  all-region figure is noted alongside.
+- **Coherence is read on `phi`, not `reward`.** `reward` carries the shared
+  image-level AES factor, which mechanically pulls every region together; `phi`
+  (AES divided out) is the honest per-region view.
 
-| corruption / severity | target unchanged | other unchanged |
+### 0. The judge perceives the damage (`scripts/pq_response.py`)
+
+Image-level quality (AES = min(PQ), the reward's own term) drops when we corrupt
+one region, **monotonically with severity**:
+
+| corruption | ΔAES (severe) | share of variants where AES dropped |
 |---|---|---|
-| blur 1 / 3 | 0.704 / 0.561 | 0.731 / 0.603 |
-| jpeg 1 / 3 | 0.771 / 0.556 | 0.774 / 0.590 |
-| noise 1 / 3 | 0.752 / 0.479 | 0.763 / 0.503 |
-| saturate 1 / 3 | 0.771 / 0.710 | 0.786 / 0.723 |
-| remove (binary) | 0.514 | 0.535 |
+| noise s3 | −2.68 | 62% |
+| remove | −2.50 | 57% |
+| jpeg s3 | −1.77 | 45% |
+| blur s3 | −1.61 | 43% |
+| saturate s3 | −0.62 | 22% |
 
-**48-77% of damaged regions get a score identical to their clean control**, and
-`target_unchanged` tracks `other_unchanged` in every single cell — the region we
-damaged is no more likely to move than one we did not touch.
+against a between-base control-AES SD of 3.36 (control mean AES 19.2 / 25). Mild
+severities barely move; severe ones move a real fraction of the base-to-base
+spread, in a sensible ordering. So a flat per-region result is about
+**attribution, not perception** — the judge is not blind to the damage, and not
+defeated by the `max_pixels` cap.
 
-### 2. The judge revises the whole image at once (the strongest result)
+### 1. The per-region score is no more likely to move on the damaged region
 
-Across 4,759 multi-region variants: **only 21.6% show some regions moving while
-others hold, against 68.4% expected** if regions moved independently at the same
-overall rate (per-region move rate 0.352). 53.1% of variants move *no* region,
-25.3% move *every* region. The per-region scores share one whole-image decision.
+Tie rate (`delta == 0` exactly, greedy so not sampling noise), floor-excluded,
+`reward`:
 
-### 3. AUROC ~0.51 everywhere
+| corruption / severity | target unchanged | any-other unchanged |
+|---|---|---|
+| blur 1 / 3 | 0.539 / 0.327 | 0.576 / 0.388 |
+| jpeg 1 / 3 | 0.641 / 0.332 | 0.643 / 0.364 |
+| noise 1 / 3 | 0.609 / 0.190 | 0.610 / 0.211 |
+| saturate 1 / 3 | 0.648 / 0.560 | 0.654 / 0.565 |
+| remove (binary) | 0.264 | 0.288 |
 
-Localization AUROC (0.5 = no spatial information):
+`target_unchanged` tracks `other_unchanged` in every cell — **the region we
+damaged is no more likely to move than one we did not touch.** (All-region tie
+rates run higher, 48-77%, because of the floored regions; the equality of target
+and other holds either way, and the score does react more under strong damage —
+noise s3 drops the target 76% of the time — it just does not react *selectively*.)
 
-| by corruption | blur | jpeg | noise | remove | saturate |
-|---|---|---|---|---|---|
-| AUROC | 0.518 | 0.515 | 0.508 | 0.517 | 0.513 |
+### 2. AUROC ~0.52-0.54: weak spatial information, not zero
 
-By severity, all four readouts (`reward` / `phi` / `sc_preserve` / `sc_success`)
-land in 0.51-0.53. AUROC is a *consequence* here and is unreadable alone — with
-tie rates this high, 0.5 means "did not react", not "reacted at random". Report
-the tie rate beside every AUROC.
+Localization AUROC, floor-excluded (0.5 = none):
 
-### 4. Redundancy R^2 = 0.52-0.56
+| readout | sev 1 | sev 3 | remove |
+|---|---|---|---|
+| reward | 0.518 | 0.530 | 0.533 |
+| phi | 0.513 | 0.521 | 0.538 |
 
-Each region's score regressed on the leave-one-out mean of the image's other
-regions: `reward` 0.56, `phi` 0.52, `sc_preserve` 0.53, `sc_success` 0.53. Half
-the per-region variance is the other regions' impression — corroborates #2.
+By corruption (all-region) 0.508-0.518. It is **weak signal, not zero**: the
+targeted region does drop somewhat more than the others on average (floor-excl
+`phi`, `remove`: mean delta −3.76 vs −2.38, ~1.6×), but tie rates of 67-84% and
+whole-image co-movement swamp it, so the reward cannot reliably identify the
+damaged region. Report the tie rate beside every AUROC: with ties this high, 0.5
+means "reacts globally", not "reacts at random". "AUROC exactly 0.5, no signal"
+would be an overstatement.
+
+### 3. When scores move, they move largely as a whole-image event
+
+Coherence — fraction of multi-region variants where some regions move while others
+hold, vs. what independent per-region movement predicts at the same overall rate:
+
+| readout | frac_mixed | expected if independent |
+|---|---|---|
+| reward (AES-inflated) | 0.15 | 0.74 |
+| **phi (honest)** | **0.278** | **0.511** |
+
+On `phi`, mixed movement is ~half what independence predicts (0.278 vs 0.511) —
+still non-independent, but far more modest than the AES-driven `reward` figure
+(the shared image-level factor mechanically co-moves regions, which is why the
+first pass reported the dramatic 22% vs 68%). Corroborated by leave-one-out
+redundancy R^2 = **0.52** (`phi`) / 0.56 (`reward`), unchanged by floor exclusion.
 
 ### The layout-drift confound is ruled out
 
@@ -88,19 +131,31 @@ between-variant SD of clean controls of **0.408** — the effect is a fraction o
 the base-to-base spread. 39% of `reward` values sit on a rail (0 or ~0.98): many
 edits genuinely failed or maxed out.
 
-### Caveats for the report
+### Caveats and scope for the report (state all of these)
 
+- **Base Qwen3-VL-8B + the A.4.3 prompt, NOT the deployed reward model.** SFReward
+  is Qwen3-VL-8B *fine-tuned* on 14K examples that a Gemini-3-Pro teacher labelled.
+  We audit the prompt-based protocol on the base model. We cannot claim the
+  fine-tuned SFReward, or the Gemini teacher, behaves this way — the fine-tuning
+  exists precisely to shape this behaviour. This bounds the claim and must be
+  loud.
 - **One judge, one family** (Qwen3-VL-8B). Claiming this is about the *protocol*
-  and not this backbone needs a second, independent family. Still the main open
-  piece of strengthening work.
+  and not this backbone needs a second, independent family. The main open piece
+  of strengthening work.
+- **Natural region sizes only** (`area_bin: full`, mean 4.5% of image, the low end
+  of the paper's 2-25% band). Whether large-region damage localises better is
+  untested.
 - **Greedy decoding, so no within-run noise floor.** The finding rests on the tie
-  rate and the between-variant SD, both of which are the right instruments here.
-  The `T=0.7 n=5` floor run over the identical variants is still to do.
+  rate and the between-variant SD, both the right instruments here. The
+  `T=0.7 n=5` floor run over the identical variants is still to do.
 - **`n = 150` photographs.** Regions within an image are not independent (that is
   the finding), so effective n is the photo count, not the 5,236 variants.
 - The `score_preserve` overediting question is now partly informed — the axis
   does move, it just does not localise — but the direct removal-vs-recolour
   `sc_preserve` comparison has not been run.
+
+All numbers above regenerate from the committed parquets on a CPU laptop; the
+commands are in [`../results/main_2026-09-18/REPRODUCE.md`](../results/main_2026-09-18/REPRODUCE.md).
 
 ---
 
