@@ -228,6 +228,52 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 
 ---
 
+## Recommended strengthening (optional, before the report)
+
+The main result stands on its own — none of these change the finding. Each one
+closes a specific objection a grader could raise. In priority order:
+
+**1. A second judge family — the one that matters most.** Everything so far uses
+one judge, Qwen3-VL-8B. Run the same experiment with a genuinely *different* model
+(different team, different vision system — e.g. InternVL3 or Phi-vision), **not**
+the 4B Qwen, which is the same family. Why it matters: it's the difference between
+"*this model* can't localise" (weak) and "*the method* can't localise, whichever
+model you use" (strong — and it's the claim the four papers depend on). If a
+different model fails the same way, it's the approach, not the model; if it
+suddenly succeeds, that's also a real result. Effort: medium — the harness is
+built, but a non-Qwen model first needs a smoke-test that it accepts two images
+and the JSON schema, then ~1-2h to re-judge the 150 photos. **This is the most
+likely objection to the whole paper if we skip it.**
+
+**2. The noise-floor run (temperature 0.7, 5 samples).** We asked the judge once,
+deterministically. This asks it the *same* question 5 times with randomness on, to
+measure how much it disagrees with *itself*. Why it matters: it gives us a ruler —
+any effect smaller than the judge's own random wobble is not a real signal, so
+"the effect is tiny" becomes "the effect is smaller than the judge's own noise,"
+which is far more rigorous. Bonus: the wobble is a finding on its own (the pilot
+saw the judge disagree with itself by 38% of the scale — a problem for training
+regardless of localization). Effort: low — same photos, same harness, different
+flags, a few hours on one VM.
+
+**3. A large-region check (optional).** Our damaged regions averaged 4.5% of the
+image — small. This tests bigger regions (half the image). Why it matters:
+pre-empts "of course it can't spot a tiny 4.5% blur; try something obvious." If it
+*still* can't localise big damage, the finding is bulletproof. Effort: low —
+there is already a config setting for region size.
+
+**4. The nuisance rerun on 150 (optional).** The "can it be fooled?" tests
+(shuffle the region order, hide the image, prettify it) only ran on 5 photos.
+Rerun on 150. Why it matters: two results are currently too small to report —
+hiding the image gives a high default score anyway, and shuffling the region list
+moves scores *more* than real damage does. On 150 they become reportable. Effort:
+low — ~5h on one VM, no coordination needed.
+
+**If you only do one, do #1** — it's the only one that changes what we're allowed
+to *claim*, not just how well-supported an existing claim is. #2 is the cheap,
+high-value second pick.
+
+---
+
 ## The one decision still open
 
 **"remove the X" instructions in stage 0.** They clash with `remove` also

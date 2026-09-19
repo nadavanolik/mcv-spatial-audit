@@ -266,7 +266,10 @@ paragraph above and [`docs/FINDINGS.md`](docs/FINDINGS.md).
 5. Second judge family (cross-family agreement is a finding). Strengthening, not
    blocking.
 6. Cross-VM determinism hash from the one VM that has not reported it.
-7. Optional: the `T=0.7 n=5` noise-floor run, and the nuisance rerun on 150 bases.
+7. Optional: the `T=0.7 n=5` noise-floor run, a large-region check
+   (`area_bin: half`, since `main` used only `full` at mean 4.5% area), and the
+   nuisance rerun on 150 bases. Full rationale for all of these is in
+   `TEAM_BRIEF.md` "Recommended strengthening".
 
 ## Do not re-litigate
 
