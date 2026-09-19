@@ -182,7 +182,22 @@ requirements-{judge,editor,coco}.txt   role add-ons, each -r requirements.txt
 213.1s each, every `edit.png` at source resolution, every instruction hash
 fresh. `mcv-spatial-audit/mcv-spatial-audit` on the Hub, `bases.tar.gz`, 146MB,
 public, carrying `bases.json`, `stage1_provenance.json` and `edit_drift.csv`.
-**Nothing downstream is blocked.** The `main` run is the next thing to happen.
+**Nothing downstream is blocked.**
+
+**The `main` run is DONE** (2026-09-18, `mcvgpu2025s-0050`): 150 bases, 476
+regions, 5,236 variants, all five corruptions, greedy, judged and analysed end
+to end on one VM (all five shards run serially in tmux — the disconnected
+teammates never materialised, and one VM at greedy is ~8.5h). Parse 100%, 22,176
+rows. **The per-region reward does not localise**: AUROC ~0.51 across every
+corruption and readout, 48-77% of damaged regions score identically to their
+clean control, only 22% of variants show mixed region movement against 68% under
+independence, redundancy R^2 0.52-0.56, and the layout-drift split
+(edge IoU >= 0.4, 96 bases) agrees so the confound does not drive it. `jpeg`,
+`noise`, `saturate` judged on real data for the first time and behave identically
+to `blur`/`remove`. Numbers and the raw score parquets are committed in
+`results/main_2026-09-18/`; the full account is in
+[`docs/FINDINGS.md`](docs/FINDINGS.md). What remains is the write-up, not the
+harness.
 
 Downloaded, unpacked and built into a pilot manifest on `mcvgpu2025s-0043`
 (2026-09-15): `bases.json` holds 150 bases, pilot takes 5 with 16 regions -> 80
@@ -199,40 +214,45 @@ All five test suites pass on the laptop. Cross-VM determinism is confirmed on
 **four of five VMs** (`0050`, `0043`, `0053`, `0004`), all printing
 `776feeddd281fa726195bf504c7b19c8`.
 
-**Outstanding:**
+**Outstanding (none blocks the write-up):**
 
-- Determinism hash from the last VM. This is the only unreported verification.
+- **Second judge family** — the finding is one judge, one family (Qwen3-VL-8B).
+  Cross-family agreement is what separates "the protocol does not localise" from
+  "this backbone does not". The main strengthening job left; a 4B Qwen is a
+  cross-scale comparison, not a second family.
+- The `T=0.7 n=5` noise-floor run over the identical `main` variants. Greedy gave
+  no within-run floor; the tie rate and between-variant SD carry the finding, but
+  the floor is worth having for the report.
+- Determinism hash from the last VM. Still the only unreported verification.
 - The nuisance/exploitability sweep ran once, on the pilot's 5 photos
-  (2026-09-15, `0043`): all 8 conditions parse 100%, and xgrammar accepts the
-  permuted schema. Results in [`docs/FINDINGS.md`](docs/FINDINGS.md). Too few
-  photos to be reportable except `noimg`; a controls-only rerun on 150 bases is
-  ~5h on one VM.
-- Whether the judge reads `score_preserve` as preservation or as overediting —
-  the open question in [`docs/DECISIONS.md`](docs/DECISIONS.md). Settle it by
-  measurement on the pilot parquet, not by re-reading the paper.
-- `jpeg`, `noise` and `saturate` have never been judged on real data; the pilot
-  ran only `[none, blur, remove]`.
-- **Stage 1 does not always preserve layout.** Edge IoU between source and edit
-  is below 0.40 on 54 of 150 bases, mostly indoor furniture. Masks are computed
-  on `source.png` and applied to `edit.png`, so a re-composed scene means we
-  corrupt background while claiming a region — a confound that MIMICS the
-  finding. Settled by reporting every headline twice (`stage4_analyze
-  --drift-csv out/edit_drift.csv`), not by filtering. See
-  [`docs/DECISIONS.md`](docs/DECISIONS.md).
+  (2026-09-15, `0043`): all 8 conditions parse 100%, xgrammar accepts the
+  permuted schema, only `noimg` reportable at that n. Controls-only rerun on 150
+  bases is ~5h on one VM.
+- The `score_preserve` overediting question is now partly answered — the main run
+  shows the axis moves but does not localise (see
+  [`docs/FINDINGS.md`](docs/FINDINGS.md)). The direct removal-vs-recolour
+  `sc_preserve` comparison on the parquet is still unrun.
+
+The layout-drift confound is **resolved, not outstanding**: the `main`
+drift-robustness split agrees across all-150 and layout-survived subsets, so the
+source-coordinate masks do not manufacture the null. See the current-state
+paragraph above and [`docs/FINDINGS.md`](docs/FINDINGS.md).
 
 **Do next, in order:**
 
 1. ~~Editor VM: stage 0, then edit 150 bases, then upload the tarball.~~
-   **Done 2026-09-05.** Every VM now pulls `bases.tar.gz` from
-   `mcv-spatial-audit/mcv-spatial-audit` instead. Base ids are COCO
-   train2017 image ids; anything from the pilot is dead data.
-2. Cross-VM determinism hash from the one VM that has not reported it.
-3. `main`: 150 bases, **~1.7h/VM** at greedy, sharded five ways.
-4. ~~The nuisance/exploitability sweep on one VM.~~ **Done 2026-09-15** on the
-   pilot's 5 photos, `0043`, 8 conditions including `enhance_target`.
-5. Pick and wire the second judge family (cross-family agreement is a finding).
-   A 4B Qwen is a cross-scale comparison, not a second family.
-6. Figures for the report.
+   **Done 2026-09-05.** Every VM pulls `bases.tar.gz` from
+   `mcv-spatial-audit/mcv-spatial-audit`. Base ids are COCO train2017 image ids.
+2. ~~`main`: 150 bases at greedy, sharded.~~ **Done 2026-09-18** on `0050`, all
+   five shards serial on one VM, ~8.5h. Results in `results/main_2026-09-18/`.
+3. ~~The nuisance/exploitability sweep on one VM.~~ **Done 2026-09-15** on `0043`,
+   8 conditions including `enhance_target`.
+4. **Figures and the report.** The tie-rate and coherence tables are the
+   headline, not AUROC. This is the critical path now.
+5. Second judge family (cross-family agreement is a finding). Strengthening, not
+   blocking.
+6. Cross-VM determinism hash from the one VM that has not reported it.
+7. Optional: the `T=0.7 n=5` noise-floor run, and the nuisance rerun on 150 bases.
 
 ## Do not re-litigate
 

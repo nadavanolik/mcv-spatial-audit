@@ -1,0 +1,2 @@
+judge,n_variants,regions_per_variant,per_region_move_rate,frac_none,frac_all,frac_mixed,mixed_if_independent
+Qwen/Qwen3-VL-8B-Instruct,4759,3.0,0.3521693946479605,0.5312040344610213,0.2525740701828115,0.21622189535616726,0.6844383363637486

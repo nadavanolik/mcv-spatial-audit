@@ -1,6 +1,6 @@
 # Team brief
 
-Updated 2026-09-15. Start here — this is the plain-language version.
+Updated 2026-09-18. Start here — this is the plain-language version.
 Setup commands, repo structure and constraints live in [`README.md`](README.md).
 
 ---
@@ -43,11 +43,42 @@ hash check below.
 
 ## Where we are
 
-**The pipeline works end to end, and the go/no-go pilot said GO.**
+**The main run is DONE, and it answers our question: no, the per-region score is
+not really about that region.**
 
-All five stages run on real data: COCO filtering → editing with FLUX → damaging
-one region → judging with Qwen3-VL-8B → analysis. 100% of judge responses parse
-and every region gets scored.
+On 2026-09-18 we ran the full experiment on all 150 photos — every kind of
+damage, ~5,200 damaged images, ~10,500 judge queries — on one VM overnight. (The
+other four machines never came online, so one machine did all five shares; that's
+fine, the maths is identical either way.) Every response parsed.
+
+**What it found, in plain terms — the pilot was right, and now it's on 150 photos
+instead of 5:**
+
+1. **The judge usually doesn't notice the damage.** When we broke a region, its
+   score stayed *exactly the same* 48-77% of the time.
+2. **When a score does move, it's not the region we broke.** The damaged region
+   was no more likely to change than a region we never touched.
+3. **The judge grades the whole picture at once.** Either every region's score
+   moved together or none did — it singled out one region only 22% of the time,
+   where truly independent per-region grading would do it 68% of the time.
+4. **It cannot point at the damage.** The standard "which region was hit?" score
+   came out 0.51, where 0.50 is a coin flip — for every one of the five damage
+   types, including three (jpeg, noise, over-saturation) we'd never tested on real
+   photos before.
+
+Put together: **the "per-region" score is one whole-image judgement copied into
+each region slot** — exactly the failure we set out to look for, now the finding
+and not just a hunch.
+
+**We also killed the main objection.** Our editing step sometimes re-arranges a
+scene, which could fake this result (see the layout note below). So we re-ran the
+numbers on only the 96 photos where the layout stayed put — *same answer*. The
+confound is not driving it.
+
+The pipeline works end to end on real data: COCO filtering → editing with FLUX →
+damaging one region → judging with Qwen3-VL-8B → analysis. The raw numbers and
+score files are in the repo under `results/main_2026-09-18/`, so anyone can
+reproduce the four analyses on a laptop with no GPU.
 
 **The 150 photographs for the main run are now chosen.** The editor VM ran the
 selection on 2026-09-04: 1,372 photos in COCO's large split pass our rules, we
@@ -114,11 +145,13 @@ changed by ~0. Obvious damage, precisely confined.
 Put together: **the "per-region" score looks like one whole-image judgement
 copied into each region slot** — exactly the failure we set out to look for.
 
-### The honest caveat
+### The honest caveat — now resolved
 
-**This is five photographs.** It's internally consistent and it looks
-convincing, but five images is a pilot, not a result. The full run uses 150
-images and gives ~32× the data. Nobody should quote these numbers as final.
+This *was* five photographs, and we said not to quote it as final. **The 150-photo
+main run above has now replaced and confirmed it.** Quote the main-run numbers,
+not the pilot's. What still stands as a caveat: it's one judge from one model
+family (Qwen3-VL-8B), so a second, unrelated family is the piece that would let us
+say this is about the *method* and not just this one model.
 
 ### What the "can it be fooled" test found (2026-09-15)
 
@@ -181,10 +214,10 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 | Role | Where it stands | Next |
 |---|---|---|
 | **Editor VM** | done - 150 photos edited and published as `bases.tar.gz` | Nothing blocking. The VM still holds FLUX, so it is the one to use if any base ever needs re-editing |
-| **Judge harness** | working, 100% parse, real published prompt, sampling decided | Nuisance + exploitability sweep done 2026-09-15 on 5 photos (results above). Optional: rerun on all 150, ~5h on one VM. `0043` already has the photos and the judge |
+| **Judge harness** | done - main run judged all 150 photos, 100% parse | Nuisance rerun on all 150 optional (~5h, `0043` has the photos and judge). Otherwise done |
 | **Corruption + manifest** | determinism confirmed on 4 of 5 VMs | Chase the last one. Own `config.yaml` |
-| **Analysis** | stage 4 runs on real data | Start the figures. The tie-rate and coherence tables are the headline ones, not AUROC |
-| **Second judge** | Qwen3-VL-4B downloaded and working | Pick a second *family*, not just a second size, and justify it |
+| **Analysis** | main run analysed, result is in `results/main_2026-09-18/` | **Figures + write-up - this is the critical path now.** Tie-rate and coherence tables are the headline, not AUROC |
+| **Second judge** | Qwen3-VL-4B downloaded and working | The main science left: pick a second *family* (not just a second size), justify it, run it on the same 150 |
 
 ---
 
@@ -198,6 +231,11 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
    honestly be read both ways, so we stopped arguing and will measure it: does
    the judge give removal targets high or low preserve scores? Until then we
    cap removals at one per photo (see below) rather than dropping them.
+
+   **Update from the main run:** the preserve axis *does* move under damage — it's
+   not inert — but it moves no more for the damaged region than for any other, so
+   it behaves like every readout. The specific removal-vs-recolour preserve check
+   is a quick query on the committed parquet, not a blocker.
 
 ## Settled since the last brief
 
@@ -322,9 +360,10 @@ caught it.
 ## Timeline to 30.9
 
 - **Week 1 — done.** Setup, pipeline verified, pilot, go/no-go. Verdict GO.
-- **Week 2** — 150 images edited and shipped; manifest frozen; main run.
-- **Week 3** — second judge family. The nuisance + exploitability sweep is done
-  (2026-09-15, 5 photos).
+- **Week 2 — done.** 150 images edited and shipped; manifest frozen; **main run
+  done 2026-09-18, and it answered the question.**
+- **Week 3 (now)** — figures and the write-up begin; optionally the second judge
+  family and the noise-floor run. Nuisance sweep already done on 5 photos.
 - **Week 4** — figures, LaTeX, repo cleanup.
 - **Week 5** — buffer and the 5-minute talk. Don't plan work here.
 

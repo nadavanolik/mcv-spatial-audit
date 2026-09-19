@@ -6,6 +6,104 @@ teammates is [`../TEAM_BRIEF.md`](../TEAM_BRIEF.md).
 
 ---
 
+## MAIN RUN, 2026-09-18 — the finding at full power
+
+`mcvgpu2025s-0050`, `main` profile: 150 bases, 476 regions, 5,236 variants, all
+five corruptions `[none, blur, saturate, noise, jpeg, remove]`, Qwen3-VL-8B,
+greedy (`--temperature 0 --n-samples 1`), sharded five ways on one VM. Parse rate
+**100%**, 22,176 scored rows. Tables committed in
+[`../results/main_2026-09-18/`](../results/main_2026-09-18/), including the raw
+score parquets — every number below reproduces on a laptop with
+`python -m src.stage4_analyze --scores 'results/main_2026-09-18/scores_shard*.parquet' --all-readouts`.
+
+**The pilot finding held and sharpened. The per-region reward does not localise.**
+Everything the pilot saw on 5 photos now stands on 150, and the three corruptions
+never before judged on real data (`jpeg`, `noise`, `saturate`) behave exactly
+like `blur` and `remove`.
+
+### 1. The score usually does not move, and not on the damaged region
+
+Tie rate (`delta == 0` exactly, greedy so not noise), target vs any other region:
+
+| corruption / severity | target unchanged | other unchanged |
+|---|---|---|
+| blur 1 / 3 | 0.704 / 0.561 | 0.731 / 0.603 |
+| jpeg 1 / 3 | 0.771 / 0.556 | 0.774 / 0.590 |
+| noise 1 / 3 | 0.752 / 0.479 | 0.763 / 0.503 |
+| saturate 1 / 3 | 0.771 / 0.710 | 0.786 / 0.723 |
+| remove (binary) | 0.514 | 0.535 |
+
+**48-77% of damaged regions get a score identical to their clean control**, and
+`target_unchanged` tracks `other_unchanged` in every single cell — the region we
+damaged is no more likely to move than one we did not touch.
+
+### 2. The judge revises the whole image at once (the strongest result)
+
+Across 4,759 multi-region variants: **only 21.6% show some regions moving while
+others hold, against 68.4% expected** if regions moved independently at the same
+overall rate (per-region move rate 0.352). 53.1% of variants move *no* region,
+25.3% move *every* region. The per-region scores share one whole-image decision.
+
+### 3. AUROC ~0.51 everywhere
+
+Localization AUROC (0.5 = no spatial information):
+
+| by corruption | blur | jpeg | noise | remove | saturate |
+|---|---|---|---|---|---|
+| AUROC | 0.518 | 0.515 | 0.508 | 0.517 | 0.513 |
+
+By severity, all four readouts (`reward` / `phi` / `sc_preserve` / `sc_success`)
+land in 0.51-0.53. AUROC is a *consequence* here and is unreadable alone — with
+tie rates this high, 0.5 means "did not react", not "reacted at random". Report
+the tie rate beside every AUROC.
+
+### 4. Redundancy R^2 = 0.52-0.56
+
+Each region's score regressed on the leave-one-out mean of the image's other
+regions: `reward` 0.56, `phi` 0.52, `sc_preserve` 0.53, `sc_success` 0.53. Half
+the per-region variance is the other regions' impression — corroborates #2.
+
+### The layout-drift confound is ruled out
+
+The top defensive worry (masks cut on `source.png`, applied to a possibly
+re-composed `edit.png`) does **not** drive the null. Reporting every headline
+twice, all 150 bases vs. the 96 whose layout survived (edge IoU >= 0.4):
+
+| subset | bases | target unchanged | AUROC | frac mixed |
+|---|---|---|---|---|
+| all | 150 | 0.633 | 0.514 | 0.216 |
+| edge IoU >= 0.4 | 96 | 0.650 | 0.515 | 0.183 |
+
+The two rows agree, so the finding does not rest on the geometrically doubtful
+bases. No independent-detector pass is needed.
+
+### Which axis moves, and the effect size
+
+On the targeted region, `sc_success` and `sc_preserve` fall together and
+slightly from the `none` baseline (13.57 / 13.39 clean; ~12.2 / ~11.8 under
+`remove`); `sc_preserve` drops marginally more than `sc_success` (e.g. `remove`
+target mean delta -1.55 vs -1.26) but with 76-88% ties it does not localise
+either. The mean target effect on `reward` is |delta| = 0.028, against a
+between-variant SD of clean controls of **0.408** — the effect is a fraction of
+the base-to-base spread. 39% of `reward` values sit on a rail (0 or ~0.98): many
+edits genuinely failed or maxed out.
+
+### Caveats for the report
+
+- **One judge, one family** (Qwen3-VL-8B). Claiming this is about the *protocol*
+  and not this backbone needs a second, independent family. Still the main open
+  piece of strengthening work.
+- **Greedy decoding, so no within-run noise floor.** The finding rests on the tie
+  rate and the between-variant SD, both of which are the right instruments here.
+  The `T=0.7 n=5` floor run over the identical variants is still to do.
+- **`n = 150` photographs.** Regions within an image are not independent (that is
+  the finding), so effective n is the photo count, not the 5,236 variants.
+- The `score_preserve` overediting question is now partly informed — the axis
+  does move, it just does not localise — but the direct removal-vs-recolour
+  `sc_preserve` comparison has not been run.
+
+---
+
 ## PILOT VERDICT, 2026-08-26 — GO
 
 5 bases, 75 variants, `[none, blur, remove]`, Qwen3-VL-8B, greedy

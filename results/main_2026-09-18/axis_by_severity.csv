@@ -1,0 +1,11 @@
+judge,corruption,severity,sc_success,sc_preserve,phi,reward
+Qwen/Qwen3-VL-8B-Instruct,blur,1,13.151,12.878,12.637,0.456
+Qwen/Qwen3-VL-8B-Instruct,blur,3,12.279,11.702,11.46,0.415
+Qwen/Qwen3-VL-8B-Instruct,jpeg,1,13.046,12.878,12.773,0.46
+Qwen/Qwen3-VL-8B-Instruct,jpeg,3,13.368,13.084,12.8,0.45
+Qwen/Qwen3-VL-8B-Instruct,noise,1,13.571,13.361,13.172,0.474
+Qwen/Qwen3-VL-8B-Instruct,noise,3,13.319,12.826,12.647,0.427
+Qwen/Qwen3-VL-8B-Instruct,none,0,13.571,13.393,13.13,0.475
+Qwen/Qwen3-VL-8B-Instruct,remove,binary,12.248,11.765,11.481,0.411
+Qwen/Qwen3-VL-8B-Instruct,saturate,1,13.414,13.319,13.141,0.473
+Qwen/Qwen3-VL-8B-Instruct,saturate,3,13.718,13.508,13.309,0.472
