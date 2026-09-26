@@ -195,7 +195,7 @@ def _mm_args(model: str) -> tuple[dict, dict]:
         return ({"image": 2, "video": 0},
                 {"max_pixels": MAX_PIXELS, "min_pixels": MIN_PIXELS})
     return ({"image": 2},
-            {"max_dynamic_patch": 6} if "internvl" in lower else {})
+            {"max_dynamic_patch": 2} if "internvl" in lower else {})
 
 
 def _build_engine(model: str, max_len: int, util: float):
