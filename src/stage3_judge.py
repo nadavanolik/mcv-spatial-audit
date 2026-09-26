@@ -183,12 +183,32 @@ def _whitespace_kwargs() -> dict:
     return {}
 
 
+def _mm_args(model: str) -> tuple[dict, dict]:
+    """(limit_mm_per_prompt, mm_processor_kwargs) for this model family.
+
+    One definition, read by both _build_engine and dry_run, so the dry run can
+    never advertise a config the engine would not use -- the failure mode this
+    file has already had twice with sampling params.
+    """
+    lower = model.lower()
+    if "qwen" in lower:
+        return ({"image": 2, "video": 0},
+                {"max_pixels": MAX_PIXELS, "min_pixels": MIN_PIXELS})
+    return ({"image": 2},
+            {"max_dynamic_patch": 6} if "internvl" in lower else {})
+
+
 def _build_engine(model: str, max_len: int, util: float):
     from vllm import LLM
 
     ws = _whitespace_kwargs()
     if ws:
         print(f"grammar whitespace: disabled via {list(ws)[0]}")
+
+    # Both multimodal arguments below are family-specific. The "video": 0 limit
+    # and the pixel budget are Qwen3-VL's; another family needs neither, and a
+    # processor kwarg its processor does not accept is a startup error.
+    mm_limits, mm_kwargs = _mm_args(model)
 
     def _make(extra: dict):
         return LLM(
@@ -202,8 +222,8 @@ def _build_engine(model: str, max_len: int, util: float):
             # a 4.62GiB allocation on top of 16.8GiB of weights, which OOMs the A10
             # during profile_run before a single request is served. We only ever
             # send two images.
-            limit_mm_per_prompt={"image": 2, "video": 0},
-            mm_processor_kwargs={"max_pixels": MAX_PIXELS, "min_pixels": MIN_PIXELS},
+            limit_mm_per_prompt=mm_limits,
+            mm_processor_kwargs=mm_kwargs,
             # Cap the prefill chunk. vLLM defaults this to max_model_len and sizes
             # the profiling activation peak from it; our prompts are ~1,750 tokens
             # (2 images ~750 each + ~250 of text), so 4096 is ample headroom and
@@ -572,10 +592,10 @@ def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
     print(f"  model={a.model} dtype=bfloat16 "
           f"max_model_len={a.max_model_len} "
           f"gpu_memory_utilization={a.gpu_util}")
-    print("  enforce_eager=True max_num_batched_tokens=2048 "
-          "limit_mm_per_prompt={'image': 2, 'video': 0}")
-    print(f"  mm_processor_kwargs={{'max_pixels': {MAX_PIXELS}, "
-          f"'min_pixels': {MIN_PIXELS}}}")
+    dry_limits, dry_mm_kwargs = _mm_args(a.model)
+    print(f"  enforce_eager=True max_num_batched_tokens=2048 "
+          f"limit_mm_per_prompt={dry_limits}")
+    print(f"  mm_processor_kwargs={dry_mm_kwargs}")
 
     if "PLACEHOLDER" in (judge_prompt.__doc__ or ""):
         # ASCII only: this runs on a Windows console, which is not UTF-8.
