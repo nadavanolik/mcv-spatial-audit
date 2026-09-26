@@ -1,0 +1,3 @@
+readout,judge,r2,n
+reward,OpenGVLab/InternVL3-2B,0.718077450176725,16940
+reward,Qwen/Qwen3-VL-8B-Instruct,0.5615141540616471,16936
