@@ -216,6 +216,14 @@ def _build_engine(model: str, max_len: int, util: float):
     # (False), so nothing about that configuration changes.
     trust = "qwen" not in model.lower()
 
+    # Sampler warmup profiles max_num_seqs dummy requests at once, and the
+    # default (hundreds) OOMs an A10 on a non-Qwen backbone. Spread as a dict so
+    # Qwen passes NOTHING and keeps vLLM's own default, leaving the main-run
+    # configuration untouched. Caps concurrency only: under greedy decoding
+    # (temperature 0, n=1) no output changes, and this judge is effectively
+    # serial anyway at a 5,072-token KV cache.
+    seqs = {} if not trust else {"max_num_seqs": 32}
+
     def _make(extra: dict):
         return LLM(
             model=model,
@@ -242,6 +250,7 @@ def _build_engine(model: str, max_len: int, util: float):
             # our outputs are ~15-32 tokens against a multi-image prefill — so
             # prefill dominates and eager costs us very little here.
             enforce_eager=True,
+            **seqs,
             **extra,
         )
 
