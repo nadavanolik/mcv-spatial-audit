@@ -224,7 +224,7 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 | **Judge harness** | done - main run judged all 150 photos, 100% parse | Nuisance rerun on all 150 optional (~5h, `0043` has the photos and judge). Otherwise done |
 | **Corruption + manifest** | determinism confirmed on 4 of 5 VMs | Chase the last one. Own `config.yaml` |
 | **Analysis** | main run analysed, result is in `results/main_2026-09-18/` | **Figures + write-up - this is the critical path now.** Tie-rate and coherence tables are the headline, not AUROC |
-| **Second judge** | Qwen3-VL-4B downloaded and working | The main science left: pick a second *family* (not just a second size), justify it, run it on the same 150 |
+| **Second judge** | done - InternVL3-2B, a different family, judged the same 150 photos on 2026-09-26 and failed the same way | Nothing blocking. Numbers in `results/two_judge_2026-09-26/` |
 
 ---
 
@@ -233,17 +233,21 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 The main result stands on its own — none of these change the finding. Each one
 closes a specific objection a grader could raise. In priority order:
 
-**1. A second judge family — the one that matters most.** Everything so far uses
-one judge, Qwen3-VL-8B. Run the same experiment with a genuinely *different* model
-(different team, different vision system — e.g. InternVL3 or Phi-vision), **not**
-the 4B Qwen, which is the same family. Why it matters: it's the difference between
-"*this model* can't localise" (weak) and "*the method* can't localise, whichever
-model you use" (strong — and it's the claim the four papers depend on). If a
-different model fails the same way, it's the approach, not the model; if it
-suddenly succeeds, that's also a real result. Effort: medium — the harness is
-built, but a non-Qwen model first needs a smoke-test that it accepts two images
-and the JSON schema, then ~1-2h to re-judge the 150 photos. **This is the most
-likely objection to the whole paper if we skip it.**
+**1. A second judge family — DONE 2026-09-26.** A different family (InternVL3-2B)
+judged the same 150 photos and could not point at the damaged region either — if
+anything it was even more of a whole-picture scorer than Qwen. So the problem is
+the method, not the model. The one caveat: we had to use their 2 billion
+parameter model, because their 8 billion one does not fit our graphics card, and
+they make nothing in between. That is fine for this argument, because the model
+that already failed is the big one.
+
+Why this was the one that mattered, for the write-up: everything before it used
+one judge, Qwen3-VL-8B, so the result could have been "*this model* can't
+localise" (weak) rather than "*the method* can't localise, whichever model you
+use" (strong — and it's the claim the four papers depend on). A second *size* of
+Qwen would not have settled it; only a different family could. It failing the
+same way is what lets us make the stronger claim, and it was the most likely
+objection to the whole paper.
 
 **2. The noise-floor run (temperature 0.7, 5 samples).** We asked the judge once,
 deterministically. This asks it the *same* question 5 times with randomness on, to
@@ -415,8 +419,9 @@ caught it.
 - **Week 1 — done.** Setup, pipeline verified, pilot, go/no-go. Verdict GO.
 - **Week 2 — done.** 150 images edited and shipped; manifest frozen; **main run
   done 2026-09-18, and it answered the question.**
-- **Week 3 (now)** — figures and the write-up begin; optionally the second judge
-  family and the noise-floor run. Nuisance sweep already done on 5 photos.
+- **Week 3 (now)** — figures and the write-up begin. Second judge family **done
+  2026-09-26**; the noise-floor run is still optional. Nuisance sweep already
+  done on 5 photos.
 - **Week 4** — figures, LaTeX, repo cleanup.
 - **Week 5** — buffer and the 5-minute talk. Don't plan work here.
 

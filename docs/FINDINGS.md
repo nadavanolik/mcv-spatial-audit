@@ -6,6 +6,99 @@ teammates is [`../TEAM_BRIEF.md`](../TEAM_BRIEF.md).
 
 ---
 
+## SECOND JUDGE, 2026-09-26 — a different family fails the same way
+
+InternVL3-2B (OpenGVLab) on the identical `main` manifest (hash
+`1d862ad6ce725e26`, 150 photos, 5,236 variants), judged and analysed against the
+Qwen3-VL-8B run. Scores in
+[`../results/internvl3_2b_2026-09-26/`](../results/internvl3_2b_2026-09-26/),
+the paired analysis in
+[`../results/two_judge_2026-09-26/`](../results/two_judge_2026-09-26/).
+
+**Every figure below is floor-excluded (`--min-control 0`)**, the main entry's
+primary convention — regions whose clean control already scored 0 cannot drop and
+are guaranteed ties. All-region numbers run substantially higher (tie rates ~0.8
+rather than ~0.59) and are not what is quoted here. Re-running stage 4 with
+`--min-control 0` reproduces the committed `localization_*.csv` byte-for-byte,
+which is how the cut was confirmed rather than assumed.
+
+**Headline: the non-localization result is method-level, not a Qwen artefact.**
+A model from a different team, with a different vision encoder, on the same
+photographs, also fails to attribute damage to the region we damaged — and fails
+harder.
+
+### Why 2B, and what that costs the claim
+
+InternVL3-8B was tried first and does not fit a 24GB A10 under two-image prompts
+(forward-pass OOM), and InternVL3 has no 4B, so the family control is the 2B. The
+"it just needs a bigger model" objection is already closed by **Qwen3-VL-8B**
+failing, not by this run. What this run cannot rule out on its own is that a
+larger InternVL would localise; the cross-family claim rests on the two together.
+
+### The comparison, both judges, same variants
+
+Tie rate on the damaged region vs any untouched region (`reward`,
+`sensitivity.csv`):
+
+| corruption / severity | InternVL3-2B target / other | Qwen3-VL-8B target / other |
+|---|---|---|
+| blur 1 / 3 | 0.587 / 0.565 · 0.529 / 0.506 | 0.539 / 0.576 · 0.327 / 0.388 |
+| jpeg 1 / 3 | 0.568 / 0.561 · 0.505 / 0.485 | 0.641 / 0.643 · 0.332 / 0.364 |
+| noise 1 / 3 | 0.587 / 0.574 · 0.549 / 0.519 | 0.609 / 0.610 · 0.190 / 0.211 |
+| saturate 1 / 3 | 0.587 / 0.584 · 0.583 / 0.565 | 0.648 / 0.654 · 0.560 / 0.565 |
+| remove (binary) | 0.490 / 0.463 | 0.264 / 0.288 |
+
+Localization AUROC (`localization_reward.csv`, `localization_phi.csv`):
+
+| readout | judge | sev 1 | sev 3 | remove |
+|---|---|---|---|---|
+| reward | InternVL3-2B | 0.499 | 0.493 | 0.498 |
+| reward | Qwen3-VL-8B | 0.518 | 0.530 | 0.533 |
+| phi | InternVL3-2B | 0.500 | 0.495 | 0.501 |
+| phi | Qwen3-VL-8B | 0.513 | 0.521 | 0.538 |
+
+Redundancy against the leave-one-out image mean (`redundancy_*.csv`):
+InternVL **R^2 = 0.718** (`reward`) / **0.705** (`phi`), against Qwen's 0.562 /
+0.520.
+
+Coherence on `phi`, the honest per-region readout
+([`phi/coherence.csv`](../results/two_judge_2026-09-26/phi/coherence.csv)):
+mixed movement **0.073 against 0.596** expected under independence for InternVL,
+and **0.278 against 0.511** for Qwen. InternVL's regions move together far more
+completely — it is closer to a pure whole-image judgement than Qwen is. (The
+Qwen figures reproduce the main entry's exactly, on the same variants.)
+
+### Same kind, different degree — and the degree is the honest part
+
+- **Same in kind.** Neither judge localises. For InternVL the target's tie rate
+  is *above* the untouched regions' in all nine cells, and its mean per-region
+  `phi` delta on the target is slightly *smaller* than on untouched regions
+  (sev 1 -1.296 vs -1.323; sev 3 -1.555 vs -1.677; remove -2.867 vs -2.928).
+  That is zero spatial information, not weak information.
+- **Different in degree.** Qwen has the weak-but-nonzero signal the main entry
+  describes (target `phi` delta -3.755 vs -2.377 on `remove`, ~1.6x); InternVL
+  has none, and is more globally coupled on every measure (R^2 0.718 vs 0.562,
+  `phi` mixed 0.073 vs 0.278). Qwen also reacts far more often under strong
+  damage (noise s3 target tie 0.190 vs InternVL's 0.549).
+- **The degree difference cannot be attributed to family.** The two judges differ
+  in family *and* in scale (8B vs 2B), so "InternVL is flatter" confounds the two.
+  What the pair supports is the shared conclusion — no localization in either —
+  not a ranking between them.
+
+### One limit of these artifacts, to know before quoting them
+
+`drift_robustness.csv` **pools both judges**: `drift_robustness()` does not group
+by `judge`, and its `frac_mixed` column takes the first row of a per-judge
+coherence table (InternVL's). Its split (all: 119 bases, `target_unchanged`
+0.484, AUROC 0.510; `edge_iou>=0.4`: 71 bases, 0.470, 0.511) does agree across
+the split, but it is **not a per-judge number**. Qwen's own drift split is the
+one in [`../results/main_2026-09-18/`](../results/main_2026-09-18/); a per-judge
+split for InternVL has not been run.
+
+`noise_floor.csv` is empty for both judges: greedy decoding, as designed.
+
+---
+
 ## MAIN RUN, 2026-09-18 — the finding at full power
 
 `mcvgpu2025s-0050`, `main` profile: 150 bases, 476 regions, 5,236 variants, all
@@ -139,9 +232,10 @@ edits genuinely failed or maxed out.
   fine-tuned SFReward, or the Gemini teacher, behaves this way — the fine-tuning
   exists precisely to shape this behaviour. This bounds the claim and must be
   loud.
-- **One judge, one family** (Qwen3-VL-8B). Claiming this is about the *protocol*
-  and not this backbone needs a second, independent family. The main open piece
-  of strengthening work.
+- ~~**One judge, one family** (Qwen3-VL-8B).~~ **Closed 2026-09-26**: InternVL3-2B,
+  a different family, fails the same way on the identical manifest — see the
+  second-judge entry at the top of this file. The remaining scale caveat is that
+  the family control is a 2B, because InternVL3-8B does not fit the A10.
 - **Natural region sizes only** (`area_bin: full`, mean 4.5% of image, the low end
   of the paper's 2-25% band). Whether large-region damage localises better is
   untested.
