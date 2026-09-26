@@ -210,6 +210,12 @@ def _build_engine(model: str, max_len: int, util: float):
     # processor kwarg its processor does not accept is a startup error.
     mm_limits, mm_kwargs = _mm_args(model)
 
+    # InternVL ships its own modeling code and vLLM refuses to load it without
+    # this. It means executing Python from the model repo, which is why it is
+    # gated rather than global: the Qwen main-run path keeps vLLM's own default
+    # (False), so nothing about that configuration changes.
+    trust = "qwen" not in model.lower()
+
     def _make(extra: dict):
         return LLM(
             model=model,
@@ -224,6 +230,7 @@ def _build_engine(model: str, max_len: int, util: float):
             # send two images.
             limit_mm_per_prompt=mm_limits,
             mm_processor_kwargs=mm_kwargs,
+            trust_remote_code=trust,
             # Cap the prefill chunk. vLLM defaults this to max_model_len and sizes
             # the profiling activation peak from it; our prompts are ~1,750 tokens
             # (2 images ~750 each + ~250 of text), so 4096 is ample headroom and
