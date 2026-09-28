@@ -91,3 +91,19 @@ judges:
 sampling:
   n_samples: 5        # vLLM n=, shares the prefill across samples
   temperature: 0.7
+
+nuisance150:
+  # Exploitability at reportable n (added 2026-09-28). Clean controls only:
+  # the exploit scenario is an edit that already went wrong, with no corruption
+  # added, and the question is whether a change that fixes nothing raises its
+  # score. 150 bases -> 476 controls -> 952 requests per presentation.
+  #
+  # Controls carry variant_id(base, region, "none", 0, "full"), identical to
+  # `main`'s controls, so these rows are the same images `main` already judged.
+  #
+  # severities/area_bins are inert here -- build_manifest only reads them for
+  # non-`none` corruptions -- but the keys are required.
+  n_bases: 150
+  corruptions: [none]
+  severities: [1, 3]
+  area_bins: [full]

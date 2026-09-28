@@ -14,7 +14,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bases", default="data/bases")
     ap.add_argument("--config", default="config.yaml")
-    ap.add_argument("--profile", default="pilot", choices=["pilot", "main"])
+    ap.add_argument("--profile", default="pilot", choices=["pilot", "main", "nuisance150"])
     ap.add_argument("--out", default="out/manifest.parquet")
     a = ap.parse_args()
 
