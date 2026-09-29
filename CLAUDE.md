@@ -11,7 +11,8 @@ before questioning a default or re-opening a settled question:
 
 ## The project
 
-MCV final project, 5 students, due **30 September 2026**. An inference-only
+MCV final project, 5 students. The 30 September 2026 deadline was **extended**;
+new date TBC. An inference-only
 audit asking whether per-region VLM reward scores are actually spatially
 resolved.
 
@@ -58,6 +59,15 @@ settle manifest plumbing and message construction on the laptop, so an SSH
 session only ever debugs the vLLM API surface. It needs stage-1 bases and stage-2
 variants on disk; without them it prints an inventory and exits 1.
 
+**Stage 2 and stage 3 must share one login session.** systemd's `RemoveIPC=yes`
+empties the user's `/dev/shm` when their last session ends, and every
+`ssh host 'cmd'` is its own session — so rendering variants in one SSH call and
+judging them in the next leaves stage 3 with nothing, reporting
+`MISSING INPUTS`. Use `tmux`, or have the runner re-render when the directory is
+missing. Regeneration is deterministic and costs ~16s for 476 controls, so the
+guard is free. This never shows up in an interactive session; it only bites
+automation.
+
 Anything that runs on both sides must stay OS-portable — no `os.statvfs`, no
 POSIX-only paths, and printed strings stay ASCII (the Windows console is not
 UTF-8; an em-dash in a `print` mojibakes).
@@ -77,7 +87,7 @@ five VMs.**
 | Constraint | Consequence |
 |---|---|
 | A10 = SM 8.6 (Ampere) | **bf16 only, never fp8** — those kernels need SM 8.9+. The official Qwen FP8 checkpoint is unusable. |
-| `A10-24Q` leaves 21.37 of 23.72GiB free | `gpu_memory_utilization` has a narrow **two-sided** window, ~(0.861, 0.901). Both ends fail. `DEFAULT_GPU_UTIL = 0.89`. |
+| `A10-24Q` leaves 21.37 of 23.72GiB free | `gpu_memory_utilization` has a narrow **two-sided** window, ~(0.861, 0.901). Both ends fail. `DEFAULT_GPU_UTIL = 0.89`. **That window is for a ~16GiB checkpoint.** A *small* judge needs a LOWER value, not the same one: at 0.89 InternVL3-2B sized a 16.76GiB KV cache, then OOMed in sampler warmup needing 38MiB. `--gpu-util 0.60` works. |
 | Qwen3-VL accepts video | `limit_mm_per_prompt` **must** carry `"video": 0`, or vLLM sizes the encoder cache for a max-length video and OOMs. |
 | 16.8GiB of weights on a 20.16GiB budget | `load_engine` runs **eager**, `max_num_batched_tokens=2048`, `max_model_len=4096`. |
 | KV cache is 0.70GiB = 5,072 tokens | The judge is effectively serial. **This does not matter, and a 4B judge does not fix it.** |
@@ -163,7 +173,10 @@ scripts/verify_corruption.py  did the corruption damage the image, and only
                         inside the mask? [CPU] -- run before any insensitivity claim
 scripts/verify_edit_drift.py  did stage 1 keep the layout the masks describe?
                         [CPU] -- feeds stage4's --drift-csv robustness split
-scripts/nuisance_report.py    paired-delta analysis across presentations  [CPU]
+scripts/nuisance_report.py    paired-delta analysis across presentations, with
+                        bootstrap intervals over photographs  [CPU]
+scripts/judge_agreement.py    do two judges agree on the same image? the only
+                        analysis that spans judges  [CPU]
 
 tests/test_determinism.py   5 determinism properties
 tests/test_stage0.py        selection logic via a stub COCO (no pycocotools)
@@ -172,7 +185,7 @@ tests/test_nuisance.py      presentation axes + 3 judges; also builds the fixtur
                             that --dry-run needs
 tests/test_syntax.py        every file parses; GPU modules import without torch
 
-config.yaml             pilot / main / full_cross profiles
+config.yaml             pilot / main / nuisance150 / full_cross profiles
 requirements.txt        core, every machine (determinism-critical pins)
 requirements-{judge,editor,coco}.txt   role add-ons, each -r requirements.txt
 ```
@@ -213,6 +226,65 @@ Gemini teacher. Numbers, raw parquets and `REPRODUCE.md` are in
 full account in [`docs/FINDINGS.md`](docs/FINDINGS.md). What remains is the
 write-up, not the harness.
 
+**Exploitability at 150 bases is DONE** (2026-09-29, `mcvgpu2025s-0004`): the
+`nuisance150` profile — 476 clean controls, no corrupted variants — judged by
+Qwen3-VL-8B under `baseline`, `noimg`, `enhance`, `enhance_target`, 8,064 rows,
+~100 photographs per exploit cell against the pilot's 4. **`noimg` is the one
+real exploit and it replicates**: mean `reward` +0.219 overall, **+0.591 on edits
+the judge had already called failed, 94% of those regions rising**, against a
+0.114 noise floor. Ok edits drift the other way (-0.107): with no image the judge
+falls to a high default near `phi` 19. Describe `noimg` as a **constant**, not a
+gain: the slope of gain on baseline is -0.922 and `sd` falls 0.417 -> 0.173, so
+"+0.55 on failed edits" is arithmetic, not a second finding. Quote the default
+(blind `reward` 0.71 vs sighted 0.46). **The cosmetic axes are reversion to the
+mean, not exploits** — an earlier "small but real" claim was **retracted
+2026-09-29** after an audit: the failed/ok split selects on the judge's own
+baseline and measures change from that same baseline, one linear term absorbs the
+entire gap (+0.058/-0.056 -> -0.009/+0.009), and letting the *other* judge pick
+the failed edits puts all four cells over zero. **No local flattery, and the
+contrast is unusable**: the uniform `enhance` control, which cannot flatter
+locally, gives +0.30 [+0.11, +0.51] target-minus-other against
+`enhance_target`'s +0.33 [-0.03, +0.69]. AES moves the wrong way too — sharpening
+*lowers* PQ for both judges. All intervals are 95% bootstrap over photographs,
+~72 per run and **uncorrected**, so no single exclusion of zero carries a claim.
+Qwen's `noimg` parses at 91.2% (every other condition 100%) because with no
+image the model loops in `reasoning` until the token cap — itself a result, but
+it biases the parsed subset toward simpler scenes, so quote it.
+
+**InternVL3-2B ran the same four conditions** (2026-09-29 20:31, same VM,
+`--gpu-util 0.60`): blind default `phi` 20.4, cosmetic axes at zero. It parses
+`noimg` at 100%, so the looping is Qwen's, not a property of image-free prompts.
+
+**The cross-family localization claim is RETRACTED (2026-09-29).** InternVL3-2B
+**fails the perception precondition**: `scripts/pq_response.py` gives it dAES
+**-0.109** on noise s3 against Qwen's **-2.68**, a control AES of 7.17/25 with a
+between-base SD of 0.67, and 63% of its per-region `phi` at exactly 0. A judge
+that does not register the stimulus cannot inform on attribution, so its AUROC of
+~0.50 measures the instrument, not the protocol. **Every localization claim is
+Qwen3-VL-8B only.** The blind-default and judge-disagreement results still stand
+across families, because neither needs sensitivity to damage. Evidence in
+`results/two_judge_2026-09-26/pq_response_internvl.csv`. A genuine cross-family
+claim needs a second judge that passes the control first — a GPU run.
+**The two judges barely agree with each other** (`scripts/judge_agreement.py`,
+the only analysis here that spans judges): on identical controls **Cohen's kappa
+on the failed/not call is 0.203** and their failed sets overlap at Jaccard 0.479.
+Lead with kappa, not Pearson — the scale is near-binary, and the rails *inflate*
+r (0.212 overall, but **0.094** among regions where both judges are off the
+rails). The per-region number does not track the region, and does not track
+anything stable across judges either. This one IS cross-family despite the
+retraction above: it needs no sensitivity to damage, only two opinions of the
+same clean edits.
+
+**The scale is effectively binary and this conditions everything.** `phi` takes
+**7 distinct values, 85.6% of them 0 or 25**; `reward` is 42.1% exactly 0 with
+four values covering 82.1%. Report the reward as 2-level in practice. This also
+vindicates invariant 6 — a continuous logprob readout on a two-valued scale would
+have manufactured a result.
+
+Numbers and raw parquets in `results/exploit_150_2026-09-29/` (`qwen/`,
+`internvl/`, `agreement/`, plus `exploit_gain.png` per judge); full account in
+[`docs/FINDINGS.md`](docs/FINDINGS.md).
+
 Downloaded, unpacked and built into a pilot manifest on `mcvgpu2025s-0043`
 (2026-09-15): `bases.json` holds 150 bases, pilot takes 5 with 16 regions -> 80
 variants, all 80 rendered by stage 2 and built into requests by `--dry-run`.
@@ -230,18 +302,25 @@ All five test suites pass on the laptop. Cross-VM determinism is confirmed on
 
 **Outstanding (none blocks the write-up):**
 
-- **Second judge family** — the finding is one judge, one family (Qwen3-VL-8B).
-  Cross-family agreement is what separates "the protocol does not localise" from
-  "this backbone does not". The main strengthening job left; a 4B Qwen is a
-  cross-scale comparison, not a second family.
 - The `T=0.7 n=5` noise-floor run over the identical `main` variants. Greedy gave
   no within-run floor; the tie rate and between-variant SD carry the finding, but
   the floor is worth having for the report.
 - Determinism hash from the last VM. Still the only unreported verification.
-- The nuisance/exploitability sweep ran once, on the pilot's 5 photos
-  (2026-09-15, `0043`): all 8 conditions parse 100%, xgrammar accepts the
-  permuted schema, only `noimg` reportable at that n. Controls-only rerun on 150
-  bases is ~5h on one VM.
+- **The nuisance axes are still at pilot n.** `shuffle`, `subset` and `box` ran
+  only on the 2026-09-15 pilot's 5 photos, where `shuffle` moved `reward` 1.55x
+  what real damage does. The 2026-09-29 rerun was controls-only, so it could not
+  carry them — a nuisance delta needs corrupted variants for its denominator.
+  Raising them to 150 bases means a manifest with corruptions, roughly 4x the
+  cost of the exploit run.
+- The `T=0.7 n=5` noise floor is the only denominator this run lacks: the
+  0.114 it is compared against comes from the 2026-09-15 pilot, over different
+  photographs. A better within-run floor already exists and is unused --
+  `enhance_target` minus `enhance` (two near-identical stimuli, same images)
+  moves `reward` by 0.09.
+- **A second judge family that passes the perception control.** InternVL3-2B
+  does not (see above), so the cross-family localization claim is retracted and
+  this is back to being the top strengthening job. Run `scripts/pq_response.py`
+  on any new judge BEFORE writing up its localization numbers.
 - The `score_preserve` overediting question is now partly answered — the main run
   shows the axis moves but does not localise (see
   [`docs/FINDINGS.md`](docs/FINDINGS.md)). The direct removal-vs-recolour
@@ -261,14 +340,14 @@ paragraph above and [`docs/FINDINGS.md`](docs/FINDINGS.md).
    five shards serial on one VM, ~8.5h. Results in `results/main_2026-09-18/`.
 3. ~~The nuisance/exploitability sweep on one VM.~~ **Done 2026-09-15** on `0043`,
    8 conditions including `enhance_target`.
-4. **Figures and the report.** The tie-rate and coherence tables are the
+4. ~~Exploitability at reportable n.~~ **Done 2026-09-29** on `0004`, 150 bases,
+   Qwen3-VL-8B. Results in `results/exploit_150_2026-09-29/`.
+5. **Figures and the report.** The tie-rate and coherence tables are the
    headline, not AUROC. This is the critical path now.
-5. Second judge family (cross-family agreement is a finding). Strengthening, not
-   blocking.
 6. Cross-VM determinism hash from the one VM that has not reported it.
 7. Optional: the `T=0.7 n=5` noise-floor run, a large-region check
    (`area_bin: half`, since `main` used only `full` at mean 4.5% area), and the
-   nuisance rerun on 150 bases. Full rationale for all of these is in
+   nuisance axes at 150 bases. Full rationale for all of these is in
    `TEAM_BRIEF.md` "Recommended strengthening".
 
 ## Do not re-litigate

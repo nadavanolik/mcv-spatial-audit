@@ -570,7 +570,7 @@ three VMs have confirmed. So `--presentation` re-packages the SAME images at
 request-build time. Any pixel change happens in memory in `build_requests` and
 is never written to disk. No manifest change, no re-render, less code.
 
-### The six axes
+### The seven axes
 
 `baseline` is the identity — byte-identical messages to what stage 3 built
 before this existed.
@@ -690,6 +690,61 @@ The sweep is **self-contained**: pilot is `[none, blur, remove]`, so
 deltas and nuisance deltas both come out of it; nothing from the main run is
 needed, and it need not use the same photographs as an earlier pilot.
 
+### `nuisance150`: the exploit axes cost a quarter of the nuisance axes
+
+Added 2026-09-28 (commit `5431dd4`). 150 bases with `corruptions: [none]`, so
+`build_manifest` emits 476 clean controls and nothing else — 952 requests per
+presentation against the ~10,500 a `main`-scale sweep would need.
+
+The asymmetry is not an optimisation, it is what the two analyses ask for. An
+**exploit** axis asks whether a change that fixes nothing raises the score of an
+edit that already went wrong, so it needs clean controls and no corruption at
+all. A **nuisance** axis asks whether a null change moves the score as much as
+real damage does, so `vs_damage` has no denominator without corrupted variants.
+Running the exploit axes over 150 bases therefore costs ~3h per judge; raising
+the nuisance axes to the same n means a manifest with corruptions and roughly 4x
+that.
+
+`full_cross` stays out of `--profile`'s `choices` list on purpose — that omission
+is the guardrail against running it by accident — so `nuisance150` was added
+explicitly alongside `pilot` and `main` rather than by reading the config keys
+dynamically.
+
+### Stage 2 and stage 3 must share one login session (found 2026-09-28)
+
+systemd's `RemoveIPC=yes` deletes the user's `/dev/shm` contents when their last
+login session ends. Every `ssh host 'cmd'` is its own session, so rendering
+variants in one SSH call and judging them in the next leaves stage 3 with an
+empty scratch directory and a `MISSING INPUTS (476 paths)` report.
+
+Observed on `0004`: 476 variants written and counted, gone on the next
+connection, with `uptime` showing no reboot and `/dev/shm` at 0 bytes used.
+
+Run both stages inside one `tmux` session, or have the runner re-render when the
+directory is missing — deterministic and ~16s for 476 controls, so the guard is
+free. Invisible interactively; it only bites automation.
+
+### `--gpu-util 0.89` is a Qwen-8B number, not a constant (found 2026-09-29)
+
+Running InternVL3-2B at `--gpu-util 0.89` on `0004` failed at engine start, in
+`_dummy_sampler_run`:
+
+```
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 38.00 MiB.
+GPU 0 has a total capacity of 23.72 GiB of which 92.75 MiB is free.
+```
+
+The cause is the opposite of the usual one. A 2B checkpoint is ~4.4GiB, so vLLM
+spent the rest of the 0.89 budget on KV cache — `Available KV cache memory:
+16.76 GiB, GPU KV cache size: 627,744 tokens` — and then the sampler warmup had
+38MiB of headroom and needed more. The `max_num_seqs=32` cap for non-Qwen
+families exists for this warmup and is not sufficient on its own.
+
+**A smaller judge needs a LOWER `--gpu-util`, not the same one.** `0.60` starts
+cleanly and gives a KV cache far beyond the 4,096-token `max_model_len` we ask
+for. The (0.861, 0.901) window in `CLAUDE.md` is derived for a ~16GiB checkpoint
+and does not transfer to another size.
+
 ### Verified vs unproven
 
 Verified on the laptop, 2026-09-04 (`tests/test_nuisance.py`, 16 checks):
@@ -716,10 +771,28 @@ Settled on a judge VM, 2026-09-15 (`0043`, pilot, 160 requests per condition):
   thrash hazard at `main` scale (`lru_cache(maxsize=64)`,
   `judge_prompt.py:197`), untested there.
 
+Settled on a judge VM, 2026-09-29 (`0004`, `nuisance150`, 952 requests per
+condition):
+
+- **The three exploit axes hold up at 150 bases**, ~100 photographs per cell.
+  `noimg` replicates; `enhance` and `enhance_target` do not — see
+  [`FINDINGS.md`](FINDINGS.md).
+- **`noimg` costs parse rate.** 91.2% against 100% for every condition carrying
+  images. `diagnose_parse.py`: 37 of 39 failures are `finish_reason=length`, the
+  model looping in the free-form `reasoning` field with no image to ground on.
+  Not fixable by raising the cap, and it biases the parsed subset toward bases
+  with fewer regions.
+- **Grammar compile cost at 150 bases is fine** for the non-`shuffle` axes: each
+  image condition ran ~30-45 min for 952 requests. `shuffle` at that scale
+  remains untested — it is the axis that turns one schema per base into up to
+  n!.
+
 Still open:
 
 - Cross-VM equality of `enhance`/`box`/`enhance_target`. Deliberately untested;
   see above.
+- `shuffle`'s grammar-compile cost at `main` scale (`lru_cache(maxsize=64)`,
+  `judge_prompt.py:197`).
 
 ---
 

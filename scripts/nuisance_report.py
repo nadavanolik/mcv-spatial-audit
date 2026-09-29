@@ -111,6 +111,174 @@ def slot_effect(df: pd.DataFrame, col: str, mode: str = "shuffle") -> pd.DataFra
             .agg(["mean", "std", "size"]).round(3).reset_index())
 
 
+def cluster_mean(gain: pd.Series, base_id: pd.Series) -> float:
+    """The mean of per-photograph means -- the estimand `boot_ci` brackets.
+
+    A row-weighted mean is a DIFFERENT estimator, and pairing one with the
+    other's interval produced point estimates sitting on their own confidence
+    bound (worst case seen: -1.345 quoted against a CI centred on -2.258, a 68%
+    discrepancy). Point and interval must estimate the same thing, so both come
+    from here.
+    """
+    g = pd.DataFrame({"gain": gain.values, "base": base_id.values}).dropna()
+    if g.empty:
+        return float("nan")
+    return float(g.groupby("base").gain.mean().mean())
+
+
+def boot_ci(gain: pd.Series, base_id: pd.Series, n_boot: int = 2000,
+            seed: int = 0) -> tuple:
+    """95% CI for `cluster_mean`, resampling PHOTOGRAPHS, not regions.
+
+    Regions inside one photograph share an edit, an instruction and a scene, so
+    they are not independent draws; a CI over rows would be far too tight. The
+    honest sample size is the number of bases, which is why `exploit_split`
+    already reports `n_bases`.
+
+    Seeded and fixed at 0 so a committed CSV reproduces exactly. This is an
+    analysis seed and has nothing to do with the corruption seeds in schema.py.
+
+    NOT multiplicity-corrected. A full run emits 30 of these per judge, so
+    "this one interval excludes zero" is weak evidence on its own -- see the
+    family-size warning in main().
+    """
+    g = pd.DataFrame({"gain": gain.values, "base": base_id.values}).dropna()
+    if g.empty:
+        return float("nan"), float("nan")
+    per_base = g.groupby("base").gain.mean()
+    if len(per_base) < 2:
+        return float("nan"), float("nan")
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(per_base), size=(n_boot, len(per_base)))
+    means = per_base.values[idx].mean(axis=1)
+    return float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))
+
+
+def reversion(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
+    """Does the condition shrink every score toward the judge's grand mean?
+
+    This is the control the failed/ok split needs and did not have. Splitting on
+    the judge's OWN baseline and then measuring change from that same baseline
+    is circular: any condition that reverts toward a central value produces a
+    positive gain on the low tail and a negative one on the high tail, with no
+    exploit involved.
+
+    `slope` regresses the gain on the baseline score. A slope near -1 means the
+    condition simply replaces the score with a constant (that is `noimg`); a
+    slope near 0 means the condition moves scores independently of where they
+    started, which is what a genuine exploit would look like. `resid_failed` and
+    `resid_ok` re-run the split on the residual after removing one linear term:
+    if those collapse to zero, the split carried nothing the slope did not.
+    """
+    succ = paired(usable(df, "sc_success"), "sc_success")
+    if BASE not in succ.columns:
+        return pd.DataFrame()
+    base_success = succ[BASE].rename("base_success")
+    v = df.drop_duplicates("variant_id").set_index("variant_id")
+    rows = []
+    for mode in EXPLOIT_AXES:
+        for col, w in w_by_col.items():
+            if mode not in w.columns:
+                continue
+            p = w[[BASE, mode]].dropna().join(base_success).dropna().reset_index()
+            p = p[(p.scored_region_id != BG)
+                  & p.variant_id.map(v.is_control).astype(bool)]
+            if len(p) < 3:
+                continue
+            gain = (p[mode] - p[BASE]).values
+            x = p[BASE].values
+            slope, intercept = np.polyfit(x, gain, 1)
+            resid = gain - (slope * x + intercept)
+            failed = (p.base_success < 20).values
+            rows.append(dict(
+                presentation=mode, readout=col, n=len(p),
+                slope=float(slope), corr=float(np.corrcoef(x, gain)[0, 1]),
+                sd_baseline=float(p[BASE].std()), sd_condition=float(p[mode].std()),
+                raw_failed=float(gain[failed].mean()) if failed.any() else float("nan"),
+                raw_ok=float(gain[~failed].mean()) if (~failed).any() else float("nan"),
+                resid_failed=float(resid[failed].mean()) if failed.any() else float("nan"),
+                resid_ok=float(resid[~failed].mean()) if (~failed).any() else float("nan"),
+            ))
+    return pd.DataFrame(rows)
+
+
+def local_contrast(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
+    """Within each variant, does the TARGET region gain more than its neighbours?
+
+    Paired inside the variant, because that is how the design is built --
+    comparing two marginal confidence intervals is not a test of their
+    difference and can hide or invent one.
+
+    Read `enhance` as the built-in negative control: it lifts the whole frame
+    uniformly, so it CANNOT flatter one region, and whatever contrast it
+    produces is the floor for this statistic. If `enhance_target` does not beat
+    that floor, there is no local flattery to report -- and if `enhance` itself
+    clears zero, the contrast is measuring something about target regions rather
+    than about the lift.
+    """
+    v = df.drop_duplicates("variant_id").set_index("variant_id")
+    rows = []
+    for mode in EXPLOIT_AXES:
+        for col, w in w_by_col.items():
+            if mode not in w.columns:
+                continue
+            p = w[[BASE, mode]].dropna().reset_index()
+            p = p[p.scored_region_id != BG]
+            if p.empty:
+                continue
+            tgt = p.variant_id.map(v.target_region_id).astype(str)
+            p = p.assign(gain=p[mode] - p[BASE],
+                         base_id=p.variant_id.map(v.base_id),
+                         where=np.where(p.scored_region_id.astype(str) == tgt,
+                                        "target", "other"))
+            piv = (p.pivot_table(index=["variant_id", "base_id"], columns="where",
+                                 values="gain").dropna().reset_index())
+            if len(piv) < 3 or "target" not in piv or "other" not in piv:
+                continue
+            diff = piv["target"] - piv["other"]
+            lo, hi = boot_ci(diff, piv.base_id)
+            rows.append(dict(presentation=mode, readout=col,
+                             n_variants=len(piv), n_bases=int(piv.base_id.nunique()),
+                             target_minus_other=float(diff.mean()),
+                             ci_lo=lo, ci_hi=hi,
+                             uniform_control=mode == "enhance"))
+    return pd.DataFrame(rows)
+
+
+def pq_by_presentation(df: pd.DataFrame) -> pd.DataFrame:
+    """What each presentation does to the two IMAGE-level quality scores.
+
+    Eq. (3) multiplies every region's phi by AES = min(PQ), so this is the
+    channel a cosmetic lift would have to exploit. PQ is one value per image,
+    not per region, hence `first()` per (variant, presentation).
+
+    Read `pq_artifacts` and `pq_naturalness` separately: AES is their MINIMUM,
+    so whichever is lower is the one that actually sets the reward, and a lift
+    that raises one while lowering the other has not helped.
+    """
+    d = df[df.parsed].copy()
+    pq = (d.groupby(["judge", "variant_id", "presentation"])
+          [["pq_naturalness", "pq_artifacts"]].first().reset_index())
+    rows = []
+    for col in ("pq_naturalness", "pq_artifacts"):
+        w = pq.pivot_table(index=["judge", "variant_id"],
+                           columns="presentation", values=col)
+        if BASE not in w.columns:
+            continue
+        for mode in [c for c in w.columns if c != BASE]:
+            p = w[[BASE, mode]].dropna()
+            if p.empty:
+                continue
+            g = p[mode] - p[BASE]
+            rows.append(dict(readout=col, presentation=mode, n=len(p),
+                             baseline_mean=float(p[BASE].mean()),
+                             condition_mean=float(p[mode].mean()),
+                             mean_gain=float(g.mean()),
+                             frac_rose=float((g > 0).mean()),
+                             frac_fell=float((g < 0).mean())))
+    return pd.DataFrame(rows)
+
+
 def exploit_table(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
     """Can the score be pushed UP without the image getting better?
 
@@ -122,19 +290,24 @@ def exploit_table(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
     preservation. Those two moving in opposite directions is a result, not a
     contradiction; a single collapsed number would hide it.
     """
+    v = df.drop_duplicates("variant_id").set_index("variant_id")
     rows = []
     for mode in EXPLOIT_AXES:
         for col, w in w_by_col.items():
             if mode not in w.columns:
                 continue
-            p = w[[BASE, mode]].dropna()
+            p = w[[BASE, mode]].dropna().reset_index()
             if p.empty:
                 continue
             gain = p[mode] - p[BASE]
+            b = p.variant_id.map(v.base_id)
+            lo, hi = boot_ci(gain, b)
             rows.append(dict(presentation=mode, readout=col, n=len(p),
+                             n_bases=int(b.nunique()),
                              baseline_mean=float(p[BASE].mean()),
                              condition_mean=float(p[mode].mean()),
-                             mean_gain=float(gain.mean()),
+                             mean_gain=cluster_mean(gain, b),
+                             ci_lo=lo, ci_hi=hi,
                              frac_rose=float((gain > 0).mean())))
     return pd.DataFrame(rows)
 
@@ -179,12 +352,54 @@ def exploit_split(df: pd.DataFrame, w_by_col: dict,
             p["gain"] = p[mode] - p[BASE]
             p["base_id"] = p.variant_id.map(v.base_id)
             for (where, edit), g in p.groupby(["where", "edit"]):
+                lo, hi = boot_ci(g.gain, g.base_id)
                 rows.append(dict(presentation=mode, readout=col, where=where,
                                  edit=edit, n=len(g),
                                  n_bases=int(g.base_id.nunique()),
-                                 mean_gain=float(g.gain.mean()),
+                                 mean_gain=cluster_mean(g.gain, g.base_id),
+                                 ci_lo=lo, ci_hi=hi,
                                  frac_rose=float((g.gain > 0).mean())))
     return pd.DataFrame(rows)
+
+
+def exploit_figure(split: pd.DataFrame, path: Path, col: str = "reward") -> bool:
+    """One bar per (presentation, failed/ok), with the bootstrap CI as the bar.
+
+    The failed-vs-ok split is the whole exploitability story, so it is the whole
+    figure. A CI that straddles zero is the visual form of "this axis does
+    nothing", which is the finding for both cosmetic axes and needs to be as
+    legible as the one axis that works.
+    """
+    import matplotlib
+    matplotlib.use("Agg")                      # no display on any of our boxes
+    import matplotlib.pyplot as plt
+
+    # split["where"], never split.where -- `.where` is a DataFrame METHOD, so
+    # attribute access returns the method and the comparison is silently False.
+    d = split[(split.readout == col) & (split["where"] == "target")]
+    if d.empty:
+        return False
+    modes = list(dict.fromkeys(d.presentation))
+    fig, ax = plt.subplots(figsize=(7, 4))
+    width, colours = 0.38, {"failed": "#c44e52", "ok": "#4c72b0"}
+    for k, edit in enumerate(("failed", "ok")):
+        sub = d[d.edit == edit].set_index("presentation").reindex(modes)
+        x = np.arange(len(modes)) + (k - 0.5) * width
+        err = np.vstack([(sub.mean_gain - sub.ci_lo).values,
+                         (sub.ci_hi - sub.mean_gain).values])
+        ax.bar(x, sub.mean_gain.values, width, label=f"{edit} edits",
+               color=colours[edit], yerr=np.abs(err), capsize=4, ecolor="0.3")
+    ax.axhline(0, color="0.2", lw=1)
+    ax.set_xticks(np.arange(len(modes)))
+    ax.set_xticklabels(modes)
+    ax.set_ylabel(f"mean gain in {col} over baseline")
+    ax.set_title("Can the score be raised without improving the edit?\n"
+                 "target region, 95% CI over photographs")
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return True
 
 
 def coverage(df: pd.DataFrame) -> pd.DataFrame:
@@ -317,11 +532,22 @@ def main() -> int:
     if len(ex):
         print(ex.round(4).to_string(index=False))
         ex.to_csv(out / "exploitability.csv", index=False)
-        for r in ex[(ex.readout == "reward") & (ex.mean_gain > 0)].itertuples():
-            print(f"\n  {r.presentation} raised mean reward by {r.mean_gain:+.4f} "
-                  f"({r.frac_rose:.0%} of regions rose)")
-            print("  with no edit improved. An editor trained on this reward "
-                  "learns the trick.")
+        # A CI straddling zero is the difference between "no effect" and
+        # "underpowered", and the two look identical in a mean alone.
+        for r in ex[ex.readout == "reward"].itertuples():
+            real = not (r.ci_lo <= 0 <= r.ci_hi)
+            if real and r.mean_gain > 0:
+                print(f"\n  {r.presentation} raised mean reward by "
+                      f"{r.mean_gain:+.4f} [{r.ci_lo:+.4f}, {r.ci_hi:+.4f}] "
+                      f"({r.frac_rose:.0%} of regions rose)")
+                print("  with no edit improved. An editor trained on this "
+                      "reward learns the trick.")
+            elif not real:
+                print(f"\n  {r.presentation}: {r.mean_gain:+.4f} "
+                      f"[{r.ci_lo:+.4f}, {r.ci_hi:+.4f}] -- CI covers zero over "
+                      f"{r.n_bases} photographs.")
+                print("  Report as no effect, with the interval; a bare mean "
+                      "cannot tell that from too few samples.")
     else:
         print("  n/a -- no exploitability condition in this glob")
 
@@ -340,8 +566,65 @@ def main() -> int:
                   f"region, {o:+.4f} elsewhere.")
             print("  A gap means the judge is flattered locally; no gap means the "
                   "lift acts on the whole image.")
+        if exploit_figure(split, out / "exploit_gain.png"):
+            print(f"\n  figure: {out / 'exploit_gain.png'}")
     else:
         print("  n/a -- needs a baseline with sc_success and an exploit condition")
+
+    print("\n=== is the split just reversion to the mean? ===")
+    print("  Splitting on the judge's OWN baseline and measuring change from")
+    print("  that same baseline is circular. slope -1 = the condition replaces")
+    print("  the score with a constant. If resid_* collapse to ~0, the split")
+    print("  carried nothing the slope did not.")
+    rev = reversion(greedy, w_by_col)
+    if len(rev):
+        print(rev.round(3).to_string(index=False))
+        rev.to_csv(out / "reversion.csv", index=False)
+        for r in rev[rev.readout == a.col].itertuples():
+            if abs(r.resid_failed) < 0.25 * abs(r.raw_failed or 1):
+                print(f"\n  {r.presentation}: slope {r.slope:+.3f}; the "
+                      f"failed/ok gap ({r.raw_failed:+.3f} vs {r.raw_ok:+.3f}) "
+                      f"falls to")
+                print(f"  {r.resid_failed:+.3f} vs {r.resid_ok:+.3f} once one "
+                      f"linear term in the baseline is removed. Report this as "
+                      f"reversion,")
+                print("  not as an exploit, unless a NON-circular split "
+                      "(scripts/judge_agreement.py) agrees.")
+
+    print("\n=== local flattery: target minus other, paired within variant ===")
+    print("  enhance is the NEGATIVE CONTROL -- it lifts the whole frame, so it")
+    print("  cannot flatter one region. Its contrast is the floor; anything")
+    print("  enhance_target does not clear is not local flattery.")
+    lc = local_contrast(greedy, w_by_col)
+    if len(lc):
+        print(lc.round(3).to_string(index=False))
+        lc.to_csv(out / "local_contrast.csv", index=False)
+        ctl = lc[(lc.presentation == "enhance") & (lc.readout == "phi")]
+        if len(ctl) and not (ctl.ci_lo.iloc[0] <= 0 <= ctl.ci_hi.iloc[0]):
+            print(f"\n  WARNING: the uniform control itself gives "
+                  f"{ctl.target_minus_other.iloc[0]:+.3f} "
+                  f"[{ctl.ci_lo.iloc[0]:+.3f}, {ctl.ci_hi.iloc[0]:+.3f}],")
+            print("  excluding zero. Target regions differ from their "
+                  "neighbours under a lift that")
+            print("  cannot flatter locally, so this contrast cannot support "
+                  "ANY local-flattery claim.")
+
+    n_ci = 2 * (len(ex) + len(split) + len(lc))
+    print(f"\n=== multiplicity: ~{n_ci} intervals in this run, uncorrected ===")
+    print("  At 95% and this family size, roughly one null cell is expected to")
+    print("  exclude zero by chance. Treat a single exclusion as exploratory;")
+    print("  the claims worth making are the ones that survive a non-circular")
+    print("  split and are large against the reversion slope.")
+
+    print("\n=== the AES channel: what each condition does to image-level PQ ===")
+    print("  AES = min(PQ), so the LOWER of the two rows sets the reward.")
+    print("  A lift that raises one and lowers the other has not helped.")
+    pq = pq_by_presentation(greedy)
+    if len(pq):
+        print(pq.round(3).to_string(index=False))
+        pq.to_csv(out / "pq_by_presentation.csv", index=False)
+    else:
+        print("  n/a -- no parsed PQ rows in this glob")
 
     print(f"\nwrote {out}")
     return 0

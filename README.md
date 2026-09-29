@@ -38,6 +38,7 @@ scripts/smoke_edit.py     one real FLUX edit on a synthetic image   [editor VM]
 scripts/smoke_judge.py    one real judge call on synthetic images   [judge VM]
 scripts/diagnose_parse.py why judge responses failed, from a parquet     [CPU]
 scripts/nuisance_report.py  nuisance + exploitability, across presentations [CPU]
+scripts/judge_agreement.py  cross-judge agreement on identical inputs [CPU]
 scripts/verify_corruption.py  did the corruption damage the image, and
                           only inside the mask?                         [CPU]
 scripts/verify_determinism.sh  cross-VM hash check
@@ -243,6 +244,17 @@ python -m scripts.nuisance_report
 
 Three things about that recipe are load-bearing:
 
+- **The exploit axes want `--profile nuisance150` instead.** That profile is 150
+  bases with `corruptions: [none]` — 476 clean controls, 952 requests per
+  condition, ~3h per judge for `baseline`, `noimg`, `enhance`, `enhance_target`.
+  Clean controls are what the exploit question needs: an edit that already went
+  wrong, with nothing corrupted. The nuisance axes cannot use it — their
+  `vs_damage` denominator needs corrupted variants — so they stay on `pilot`.
+  A small judge also needs `--gpu-util 0.60`; 0.89 is an 8B number and OOMs a 2B
+  model during sampler warmup.
+- **Stage 2 and stage 3 must run in one login session.** `RemoveIPC=yes` wipes
+  `/dev/shm` when your last session ends, so two separate `ssh host 'cmd'` calls
+  leave stage 3 with no variants. Use `tmux`.
 - **`--profile pilot`, not `--limit`.** A row limit can take a base's controls
   and drop its corrupted rows, leaving nothing to compare against.
 - **`scores_*` and `floor_*` are different prefixes.** The floor run also

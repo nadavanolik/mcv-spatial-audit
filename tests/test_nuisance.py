@@ -462,6 +462,121 @@ def test_report_splits_a_local_flatterer_on_failed_edits():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_reversion_unmasks_a_constant_judge():
+    """A condition that replaces the score with a CONSTANT must be reported as
+    reversion, not as an exploit.
+
+    This is the check that caught a wrong claim: a failed/ok split that selects
+    on a judge's own baseline and then measures that judge's change from the
+    same baseline scores positive on the low tail for purely arithmetic reasons.
+    A constant-output condition is the extreme case -- slope -1, residual gap 0 --
+    so if `reversion` cannot flag that, it cannot flag the subtle version."""
+    import numpy as np
+    import pandas as pd
+    from scripts.nuisance_report import reversion, paired
+    from src.stage4_analyze import usable
+
+    rows, rng = [], np.random.default_rng(3)
+    for b in range(12):
+        for r in range(3):
+            base = float(rng.choice([0.0, 8.0, 16.0, 25.0]))
+            for pres, val in (("baseline", base), ("noimg", 18.0)):
+                rows.append(dict(
+                    judge="fam/A", variant_id=f"v{b}_{r}", base_id=f"b{b}",
+                    scored_region_id=str(r), target_region_id="0",
+                    is_control=True, presentation=pres, sample_idx=0,
+                    sc_success=val, sc_preserve=val, phi=val,
+                    reward=val / 25.0, parsed=True))
+    df = pd.DataFrame(rows)
+    w = {c: paired(usable(df, c), c) for c in ("reward", "phi")}
+    rv = reversion(df, w).set_index(["presentation", "readout"])
+
+    r = rv.loc[("noimg", "phi")]
+    assert r.slope < -0.9, f"constant output must give slope ~-1, got {r.slope}"
+    assert r.raw_failed > 5, "the circular split must LOOK like a big gain"
+    assert abs(r.resid_failed) < 0.5, "one linear term must absorb the gap"
+    assert abs(r.resid_ok) < 0.5, "one linear term must absorb the gap"
+
+
+def test_boot_ci_resamples_photographs_not_regions():
+    """Duplicating every region within a photograph must NOT narrow the CI.
+
+    Regions in one photo share an edit, an instruction and a scene, so they are
+    not independent draws. A bootstrap over rows would take ten copies of the
+    same photograph as ten new samples and shrink the interval by ~sqrt(10),
+    reporting a precision the data does not have. This is the one property that
+    makes the interval honest, and it is invisible in the mean."""
+    import numpy as np
+    import pandas as pd
+    from scripts.nuisance_report import boot_ci
+
+    rng = np.random.default_rng(7)
+    per_base = rng.normal(0.2, 0.1, size=25)
+    thin = pd.DataFrame(dict(gain=per_base, base=[f"b{i}" for i in range(25)]))
+    fat = pd.concat([thin] * 10, ignore_index=True)     # same photos, 10x rows
+
+    lo_t, hi_t = boot_ci(thin.gain, thin.base)
+    lo_f, hi_f = boot_ci(fat.gain, fat.base)
+    assert abs((hi_t - lo_t) - (hi_f - lo_f)) < 1e-9, "row count changed the CI"
+    assert lo_t < per_base.mean() < hi_t, "CI does not cover the mean"
+
+    one = pd.DataFrame(dict(gain=[0.5, 0.4], base=["b0", "b0"]))
+    assert np.isnan(boot_ci(one.gain, one.base)[0]), "one photo is not a sample"
+
+
+def test_report_writes_the_exploit_figure():
+    """The figure must actually land on disk.
+
+    `split.where` is a DataFrame METHOD, so filtering with attribute access
+    silently yields an empty frame and no figure -- with no error anywhere. A
+    missing PNG is the only symptom, so assert on the PNG."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        _run_report(tmp, nuisance=0.0, target_lift=4.0, failed_bases=("b0",),
+                    presentations=["baseline", "enhance_target"])
+        png = tmp / "report" / "exploit_gain.png"
+        assert png.exists() and png.stat().st_size > 1000, "no exploit figure"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_agreement_scores_a_cloned_judge_as_perfect():
+    """Two judges with identical scores must agree perfectly.
+
+    Calibrates the cross-judge script the way the three fabricated judges
+    calibrate nuisance_report: if a clone does not come back at correlation 1.0
+    and Jaccard 1.0, a low real-world number says nothing about the judges."""
+    import subprocess
+    import pandas as pd
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        nd = tmp / "nuisance"
+        nd.mkdir(parents=True)
+        df = _fake_scores(0.0, failed_bases=("b0",))
+        for name, judge in (("a", "fam/A"), ("b", "fam/B")):
+            d = df.copy()
+            d["judge"] = judge
+            d.to_parquet(nd / ("scores_%s.parquet" % name))
+
+        out = tmp / "agree"
+        r = subprocess.run(
+            [sys.executable, "-m", "scripts.judge_agreement",
+             "--scores", str(nd / "scores_*.parquet"), "--out", str(out)],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True, text=True)
+        assert r.returncode == 0, (r.stdout[-2000:], r.stderr[-2000:])
+        assert r.stdout.isascii(), "non-ASCII output (Windows console is not UTF-8)"
+
+        ag = pd.read_csv(out / "agreement_reward.csv")
+        assert (ag.pearson.round(6) == 1.0).all(), ag.to_string()
+        assert (ag.mean_abs_diff.round(9) == 0.0).all(), ag.to_string()
+        ov = pd.read_csv(out / "failed_edit_overlap.csv")
+        assert float(ov.jaccard.iloc[0]) == 1.0, ov.to_string()
+        assert float(ov.agree.iloc[0]) == 1.0, ov.to_string()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 TESTS = [test_shuffle_is_a_permutation, test_shuffle_is_deterministic,
          test_shuffle_varies_across_variants,
          test_subset_keeps_the_target_and_drops_one,
@@ -476,7 +591,11 @@ TESTS = [test_shuffle_is_a_permutation, test_shuffle_is_deterministic,
          test_report_clears_a_nuisance_immune_judge,
          test_report_catches_a_nuisance_sensitive_judge,
          test_report_catches_the_aes_exploit,
-         test_report_splits_a_local_flatterer_on_failed_edits]
+         test_report_splits_a_local_flatterer_on_failed_edits,
+         test_reversion_unmasks_a_constant_judge,
+         test_boot_ci_resamples_photographs_not_regions,
+         test_report_writes_the_exploit_figure,
+         test_agreement_scores_a_cloned_judge_as_perfect]
 
 
 def main() -> int:

@@ -41,6 +41,22 @@ hash check below.
 
 ---
 
+## Say this out loud every time — especially in the talk
+
+**We tested the published scoring recipe on an off-the-shelf model, not on the
+reward model the paper actually ships.** We used base Qwen3-VL-8B with the
+scoring prompt printed in the paper's appendix. The authors fine-tuned their own
+model to do exactly this job, and we never touched it. So our claim is "the
+recipe, as published, does not localise on a standard VLM" — **not** "their model
+doesn't work". One sentence, every time; a grader who notices we blurred this
+will discount everything else.
+
+Two smaller ones in the same spirit: half the scoring prompt (the image-quality
+half) is **our reconstruction**, because the paper never printed it — so any
+number involving overall image quality inherits that guess. And every
+"doesn't find the damage" result is **one judge**, Qwen; see the second-judge
+note further down for why the other model doesn't count yet.
+
 ## Where we are
 
 **The main run is DONE, and it answers our question: no, the per-region score is
@@ -179,6 +195,70 @@ Same caveat: five photos. The "hide the picture" result is big enough to trust;
 the rest is a first look. Rerunning just the fooling test on all 150 photos is
 about five hours overnight on one VM.
 
+### The fooling test, rerun on all 150 photos (2026-09-29)
+
+We did that rerun. It changed two of the three answers, which is why it was
+worth doing.
+
+- **Hiding the picture still works, and now we can report it.** On edits the
+  judge had already called failed, sending no picture raised the score by 0.59
+  out of 1, and **94% of those regions went up** — across about 100 photos, not
+  four. Edits it had called fine drifted slightly *down*. Both are the same fact:
+  with no picture, the judge falls back on a high default opinion of about 19 out
+  of 25.
+- **Making the picture prettier does nothing.** We briefly thought otherwise and
+  wrote it up that way; a review caught the mistake and we withdrew it. The
+  apparent effect came from how we picked the "failed" edits: we used the judge's
+  own score to decide an edit was bad, then measured how much that same score
+  went up. Any change that nudges every score toward the middle will look like it
+  helps the ones that started low — that is arithmetic, not an exploit. When we
+  let the *other* judge pick which edits were bad, the effect vanished.
+- **The judge can't be flattered one region at a time either.** Sharpening only
+  the target region lifts it very slightly above its neighbours — but sharpening
+  the *whole picture evenly*, which cannot possibly favour one region, produces
+  the same gap. So the gap is about which regions we chose, not about the
+  sharpening, and the test can't tell us anything either way.
+
+One wrinkle worth knowing: when we send no picture, the judge sometimes rambles
+until it runs out of room, so **9% of those answers came back unfinished**. Every
+other condition answered 100% of the time. That is a finding in itself — shown
+nothing, it still confidently scores 91% of the time — but say the 9% out loud
+whenever you quote the no-picture number.
+
+The lesson for the write-up: at five photos the two "prettier picture" results
+pointed the *wrong way*. Only the big effect survived the jump in sample size.
+
+**The second judge does the same thing when blind.** InternVL also gives a high
+default (20 out of 25) when shown no picture, and also shows nothing for the
+prettier-picture tests. So "hiding the picture gets you a good score" holds for
+both models. InternVL answered 100% of the no-picture questions where Qwen
+rambled its way out of 9% of them.
+
+**But do not say "both judges agree the score can't find the damage."** We said
+that and had to withdraw it on 2026-09-29. Before you can claim a judge *can't
+locate* damage, you have to show it can *see* the damage at all — we check that
+by corrupting an image and watching the judge's overall quality score drop.
+Qwen's drops clearly. InternVL's barely moves, about 25 times less, and it gives
+nearly every picture the same low mark regardless. So InternVL isn't failing to
+locate the damage; it doesn't appear to notice it. Its flat result tells us about
+InternVL, not about the method. **Every "the score doesn't find the damage" claim
+is one judge, Qwen, until a second model passes that check.**
+
+**What we can still say about both: they disagree with each other.** Shown the
+same photo and the same regions, they agree on which edits even failed only 60%
+of the time. This one is safe precisely because it doesn't depend on either model
+noticing damage — it is two opinions of the same clean pictures. And it is one of
+the strongest things we found: anyone training an editor against one of these
+judges is teaching it to please *that judge*, not to make better pictures.
+
+One small difference to know if you quote both: InternVL scores lower overall, so
+its high default lands *above* even its good edits, which means hiding the
+picture nudges those up a little instead of down. Same mechanism, different
+starting point. InternVL also answered 100% of the no-picture questions, where
+Qwen rambled its way out of 9% of them.
+
+Numbers in `results/exploit_150_2026-09-29/`.
+
 ---
 
 ## YOUR MISSIONS
@@ -221,10 +301,10 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 | Role | Where it stands | Next |
 |---|---|---|
 | **Editor VM** | done - 150 photos edited and published as `bases.tar.gz` | Nothing blocking. The VM still holds FLUX, so it is the one to use if any base ever needs re-editing |
-| **Judge harness** | done - main run judged all 150 photos, 100% parse | Nuisance rerun on all 150 optional (~5h, `0043` has the photos and judge). Otherwise done |
+| **Judge harness** | done - main run judged all 150 photos, 100% parse; fooling test rerun on all 150 on 2026-09-29 | Nothing blocking. Only the "does the order matter" half is still at five photos |
 | **Corruption + manifest** | determinism confirmed on 4 of 5 VMs | Chase the last one. Own `config.yaml` |
 | **Analysis** | main run analysed, result is in `results/main_2026-09-18/` | **Figures + write-up - this is the critical path now.** Tie-rate and coherence tables are the headline, not AUROC |
-| **Second judge** | done - InternVL3-2B, a different family, judged the same 150 photos on 2026-09-26 and failed the same way | Nothing blocking. Numbers in `results/two_judge_2026-09-26/` |
+| **Second judge** | attempted - InternVL3-2B judged the same 150 photos, but it barely reacts to the damage at all, so its flat result does not count as evidence | **Still the top strengthening job.** Find a family that passes the can-it-see-the-damage check first |
 
 ---
 
@@ -233,21 +313,25 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 The main result stands on its own — none of these change the finding. Each one
 closes a specific objection a grader could raise. In priority order:
 
-**1. A second judge family — DONE 2026-09-26.** A different family (InternVL3-2B)
-judged the same 150 photos and could not point at the damaged region either — if
-anything it was even more of a whole-picture scorer than Qwen. So the problem is
-the method, not the model. The one caveat: we had to use their 2 billion
-parameter model, because their 8 billion one does not fit our graphics card, and
-they make nothing in between. That is fine for this argument, because the model
-that already failed is the big one.
+**1. A second judge family — ATTEMPTED, DOES NOT COUNT YET. Still the top job.**
+We ran InternVL3-2B on the same 150 photos on 2026-09-26 and it also failed to
+point at the damaged region, so we wrote that up as "the problem is the method,
+not the model". **A review on 2026-09-29 showed we can't claim that.** InternVL
+barely reacts to the damage at all — corrupt an image and its overall quality
+score moves about 25 times less than Qwen's, and it rates nearly every picture
+the same regardless. A model that doesn't notice the damage was never going to
+locate it, so its flat result says nothing about the method.
 
-Why this was the one that mattered, for the write-up: everything before it used
-one judge, Qwen3-VL-8B, so the result could have been "*this model* can't
-localise" (weak) rather than "*the method* can't localise, whichever model you
-use" (strong — and it's the claim the four papers depend on). A second *size* of
-Qwen would not have settled it; only a different family could. It failing the
-same way is what lets us make the stronger claim, and it was the most likely
-objection to the whole paper.
+Why this still matters most: everything we have is one judge, Qwen3-VL-8B, so a
+grader can say "*this model* can't localise" (weak) instead of "*the method*
+can't localise, whichever model you use" (strong — and it's the claim the four
+papers depend on). To close that, we need a second family that **first** passes
+the can-it-see-the-damage check, then fails to localise. The check itself is one
+CPU command (`scripts/pq_response.py`) once the judging is done, and it should be
+run *before* writing up any future judge. The constraint that pushed us to a 2B
+model — their 8B doesn't fit our card and there's nothing in between — is what
+made this likely; a different family with a mid-size model is the thing to look
+for.
 
 **2. The noise-floor run (temperature 0.7, 5 samples).** We asked the judge once,
 deterministically. This asks it the *same* question 5 times with randomness on, to
@@ -265,16 +349,24 @@ pre-empts "of course it can't spot a tiny 4.5% blur; try something obvious." If 
 *still* can't localise big damage, the finding is bulletproof. Effort: low —
 there is already a config setting for region size.
 
-**4. The nuisance rerun on 150 (optional).** The "can it be fooled?" tests
-(shuffle the region order, hide the image, prettify it) only ran on 5 photos.
-Rerun on 150. Why it matters: two results are currently too small to report —
-hiding the image gives a high default score anyway, and shuffling the region list
-moves scores *more* than real damage does. On 150 they become reportable. Effort:
-low — ~5h on one VM, no coordination needed.
+**4. The fooling tests on 150 — HALF DONE 2026-09-29.** The three "can it be
+fooled" tests (hide the image, prettify it, prettify only the target region) now
+have about 100 photos behind them instead of four. Hiding the image holds up and
+is reportable; both prettifying tests turned out to do nothing, and at five
+photos they had pointed the wrong way. Numbers in
+`results/exploit_150_2026-09-29/`.
 
-**If you only do one, do #1** — it's the only one that changes what we're allowed
-to *claim*, not just how well-supported an existing claim is. #2 is the cheap,
-high-value second pick.
+What is **not** done is the other half: shuffling the region order, dropping a
+region from the list, and drawing boxes. Those compare against how much real
+damage moves the score, so they need damaged pictures, which this run
+deliberately did not have. That matters because shuffling the list currently
+looks like it moves scores *more* than real damage does — a striking claim
+resting on five photos. Effort: higher than the exploit half, roughly four times
+the GPU hours, since the manifest has to carry corruptions again.
+
+**#1 and the exploit half of #4 are done.** Of what's left, #2 (the noise floor)
+is the cheap, high-value pick — it turns "the effect is tiny" into "the effect is
+smaller than the judge's own noise". Nothing here blocks the write-up.
 
 ---
 
@@ -395,8 +487,14 @@ All handled in the code, but you'll hit the symptoms if you deviate:
   `--index-url https://download.pytorch.org/whl/cu128`.
 - **Don't set `HF_HOME`.** A non-default path gives you a second empty cache and
   re-downloads models you already have until the disk fills.
-- **Don't change `--gpu-util`.** 0.89 sits in a narrow window — both higher and
-  lower fail — and all five VMs must use the same value.
+- **Don't change `--gpu-util` for the 8B judge.** 0.89 sits in a narrow window —
+  both higher and lower fail — and every VM running it must use the same value.
+- **But a *small* judge needs a lower one.** InternVL3-2B at 0.89 crashes on
+  startup: the model is small, so vLLM hands the leftover memory to its cache and
+  then has none left for warmup. Use `--gpu-util 0.60` for it.
+- **Rendering and judging must happen in the same SSH session.** The scratch
+  folder in `/dev/shm` is wiped the moment your last login ends, so two separate
+  `ssh` commands leave the judge with no images. Use `tmux`.
 - **Stage 1 needs sequential offload.** FLUX doesn't fit otherwise, and this is
   a VRAM limit, so freeing disk space won't help.
 
@@ -414,15 +512,18 @@ caught it.
 
 ---
 
-## Timeline to 30.9
+## Timeline
+
+**The 30.9 deadline was extended.** New date to be confirmed — ask before
+planning around it.
 
 - **Week 1 — done.** Setup, pipeline verified, pilot, go/no-go. Verdict GO.
 - **Week 2 — done.** 150 images edited and shipped; manifest frozen; **main run
   done 2026-09-18, and it answered the question.**
-- **Week 3 (now)** — figures and the write-up begin. Second judge family **done
-  2026-09-26**; the noise-floor run is still optional. Nuisance sweep already
-  done on 5 photos.
-- **Week 4** — figures, LaTeX, repo cleanup.
+- **Week 3 — done.** Second judge family **done 2026-09-26**; fooling test rerun
+  on all 150 photos **done 2026-09-29**.
+- **Week 4 (now)** — figures, LaTeX, repo cleanup. This is the only critical
+  path left; every measurement the report needs already exists.
 - **Week 5** — buffer and the 5-minute talk. Don't plan work here.
 
 The "Optimal Reward ∆" stretch goal is out of scope unless week 3 finishes

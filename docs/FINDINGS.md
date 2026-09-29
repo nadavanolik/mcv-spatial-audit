@@ -6,6 +6,287 @@ teammates is [`../TEAM_BRIEF.md`](../TEAM_BRIEF.md).
 
 ---
 
+## SCOPE — read before quoting any number on this page
+
+Every result here is **base `Qwen3-VL-8B-Instruct` driven by the A.4.3 prompt
+reproduced from a paper's appendix**, not the fine-tuned SFReward model those
+papers ship, and not its Gemini teacher. We can say the published *recipe* does
+not localise on an off-the-shelf backbone; we cannot say their trained reward
+model does not. The PQ half of the prompt is worse than that — it is
+**reconstructed** (`SFREWARD_PQ_RECONSTRUCTED`, `src/judge_prompt.py:16`), since
+the paper never publishes it, so every `reward` number and the whole AES analysis
+inherit that reconstruction. `phi` uses only the verbatim prompt and is the safer
+primary readout.
+
+A second family was attempted and **does not currently support a cross-family
+claim** — see the retraction banner in the 2026-09-26 entry.
+
+**The scale is effectively binary.** On the `main` run's 16,936 scored regions:
+
+| readout | distinct values | at 0 | at the two extremes |
+|---|---|---|---|
+| `phi` | **7** | 42.1% | **85.6%** |
+| `sc_success` | 8 | 41.4% | 85.5% |
+| `sc_preserve` | 7 | 42.0% | 87.0% |
+| `reward` | 33 | 42.1% | top four values = **82.1%** |
+| `pq_naturalness` | **5** | 0% | 73% at the single value 18 |
+
+This is arguably the most important descriptive fact in the audit and it was
+previously a half-sentence saying "39% on a rail", which understates it. Every
+downstream statistic is conditional on it: an AUROC on a near-binary score, a
+Pearson between two near-binary scores, a "noise floor" of 0.114 on a scale whose
+smallest real step is ~0.3, an R^2 on a variable with two atoms. It also
+vindicates invariant 6 — on a scale that is 86% two-valued, a continuous logprob
+readout would have manufactured a result. Report the reward as 2-level in
+practice, not 26-level.
+
+---
+
+## EXPLOITABILITY AT 150 BASES, 2026-09-29 — one exploit survives, two die
+
+`mcvgpu2025s-0004`, the `nuisance150` profile: 150 bases, **476 clean controls,
+no corrupted variants**, greedy, four presentations, 8,064 rows per judge.
+Roughly **100 photographs per exploit cell**, against the 2026-09-15 pilot's 4.
+**Both judges**: Qwen3-VL-8B and InternVL3-2B, same controls, same conditions.
+The tables below are Qwen unless stated; the cross-family comparison is further
+down. Numbers and raw parquets in
+[`../results/exploit_150_2026-09-29/`](../results/exploit_150_2026-09-29/),
+per-judge CSVs under `qwen/` and `internvl/`.
+
+Controls only, because that is the exploit scenario: an edit that already went
+wrong, no corruption added, and the question of whether a change that fixes
+nothing raises its score. The control `variant_id`s are identical to `main`'s by
+construction, so these are the same images `main` already judged.
+
+### The headline table
+
+Mean gain over the `baseline` condition. "Failed" = baseline `sc_success` below
+20 (`--failed-below`, the default).
+
+Intervals are 95% bootstrap over **photographs**, not regions: regions inside one
+photo share an edit, an instruction and a scene, so a row-level interval would be
+about sqrt(3) too tight. Qwen; the figure is `qwen/exploit_gain.png`.
+
+| condition | `reward`, all clean edits | survives a non-circular split? |
+|---|---|---|
+| `noimg` | **+0.212** [+0.154, +0.268] | **yes** — +0.31 [+0.24, +0.37] |
+| `enhance` | -0.012 [-0.036, +0.016] | no — +0.016 [-0.010, +0.044] |
+| `enhance_target` | -0.003 [-0.022, +0.019] | no — +0.019 [-0.005, +0.043] |
+
+**`noimg` is the one exploit, and it is a constant, not a gain.** Strip the
+images and mean `reward` goes 0.495 -> 0.714, `phi` 13.78 -> 18.81. The right way
+to describe this is the *shape* of the blind response, not its mean: regressing
+the gain on the baseline score gives a slope of **-0.922** with `sd` falling from
+0.417 to **0.173**. The judge shown nothing emits a near-constant. Everything
+else follows arithmetically — the gain is largest wherever the sighted score was
+lowest, which is why edits it had called failed rise ~+0.55 and edits it had
+called fine fall ~-0.10.
+
+So quote the default, not the split: **blind reward 0.71 against a sighted mean
+of 0.46, and `phi` 18.8 against 13.8.** Both judges do it (InternVL 0.44 blind
+against 0.27 sighted), and it survives selection by the *other* judge's opinion
+of which edits failed (+0.31 [+0.24, +0.37] for Qwen, +0.25 [+0.21, +0.30] for
+InternVL), so it is not an artefact of circular selection.
+
+Still not an attack an editor can run directly — the editor controls pixels, not
+whether they are sent. What it establishes is that the judge's default opinion in
+the absence of evidence is high, so any output that hides a failure from the
+judge inherits that default rather than a penalty.
+
+**The cosmetic axes are reversion to the mean, not exploits.** This entry first
+claimed them as "small but real" on the strength of a failed/ok split; that claim
+is **retracted**. Three checks, all in `qwen/reversion.csv` and
+`agreement/crossjudge_exploit.csv`:
+
+1. **The split is circular.** It selects on the judge's own baseline
+   `sc_success` and then measures that same judge's change from that same
+   baseline. Any condition that pulls scores toward a central value scores
+   positive on the low tail for purely arithmetic reasons.
+2. **One linear term absorbs it entirely.** `enhance` has slope **-0.17** on the
+   baseline; after removing that single term the failed/ok gap of +0.058 vs
+   -0.056 collapses to **-0.009 vs +0.009**. The split carried nothing the slope
+   did not.
+3. **A non-circular split kills it.** Let the *other* judge choose which edits
+   failed and the cell covers zero in all four directions: Qwen +0.016 [-0.010,
+   +0.044] and +0.019 [-0.005, +0.043]; InternVL -0.006 and +0.001, both
+   covering zero.
+
+Report both lifts as a **reversion property of the scale**: a cosmetic change
+shrinks every score toward the judge's grand mean, which flatters anything
+already below it. That is worth saying — it means the reward is partly a
+function of its own previous value — but it is not a demonstrated exploit, and
+the optimiser argument below belongs to `noimg`, not here.
+
+*(The optimiser argument, kept because it applies to any bias that does survive:
+an effect below the noise floor is not negligible to a policy. Noise averages
+away over a training run; a systematic bias does not. "Below the noise floor" is
+the right caveat for a single measurement and the wrong one for an RL
+objective.)*
+
+**There is no local flattery, and the contrast that would show it is unusable.**
+Paired within variant, `enhance_target` lifts its own region **+0.33 `phi`**
+[-0.03, +0.69] over its neighbours. But `enhance` lifts the *whole frame
+uniformly* and therefore cannot flatter one region — it is a built-in negative
+control — and it produces **+0.30 [+0.11, +0.51]** on the same contrast,
+*excluding zero*. The control is as large as the treatment. Target regions
+differ from their neighbours under any perturbation, which is unsurprising
+(they are the regions the instruction is about), so no target-vs-other contrast
+in this run can support a local-flattery claim in either direction.
+
+The earlier wording compared two *marginal* intervals, which is not a test of
+their difference on a paired design. The conclusion was right by luck.
+
+**Multiplicity.** A full run emits ~72 bootstrap intervals per judge,
+uncorrected. At 95% that is roughly one null cell expected to exclude zero by
+chance, so no single exclusion carries a claim here. The two results above are
+stated because they survive a non-circular split (`noimg`) or fail on their own
+negative control (local flattery) — not because an interval cleared zero.
+
+### The AES channel moves the wrong way (question closed 2026-09-29)
+
+`pq_by_presentation.csv`, 476 controls, both judges. The prediction was that a
+cosmetic lift raises `AES = min(PQ)` and therefore every region's reward.
+
+| judge | `pq_naturalness` under `enhance` | `pq_artifacts` under `enhance` |
+|---|---|---|
+| Qwen | 19.44 -> 18.35 (**-1.10**), 23% of images fell | 21.33 -> 20.19 (**-1.13**), 43% fell |
+| InternVL | 16.13 -> 16.47 (+0.34) | 8.15 -> 7.83 (**-0.33**) |
+
+**Sharpening lowers AES rather than raising it.** Qwen reads unsharp masking as
+damage on both terms. InternVL's naturalness rises slightly, but `AES` is the
+*minimum* and its artifacts score (8.15) sits far below its naturalness (16.13),
+so the minimum follows artifacts — which also fell. Two different routes, same
+direction.
+
+So the channel is not inert: it moves, against the exploit. The prediction in
+"The global AES factor" below was reasonable and is **tested and negative** —
+worth a line in the report as a hypothesis that did not survive. Combined with
+the reversion result above, nothing about `enhance` is exploitable: the AES
+channel moves the wrong way and the apparent `phi` gain on failed edits does not
+survive a non-circular split.
+
+One detail worth quoting: blind, both judges emit *exactly* 18.000 for
+naturalness (Qwen pairing it with 20.000, InternVL with 7.000). The no-image
+default is a hard constant, not an average over anything.
+
+### The two judges barely agree with each other
+
+Both judges scored the identical 476 controls, so they can be compared directly —
+`agreement/agreement_reward.csv`, the one analysis in this repo that spans
+judges (`scripts/judge_agreement.py`).
+
+| presentation | Pearson | Spearman | mean abs diff |
+|---|---|---|---|
+| `baseline` | **0.212** | **0.230** | 0.388 |
+| `enhance` | 0.105 | 0.104 | 0.406 |
+| `enhance_target` | 0.145 | 0.147 | 0.395 |
+| `noimg` | **-0.173** | **-0.335** | 0.317 |
+
+**On the same photograph, the same regions and the same prompt, two judges
+correlate at r = 0.21.** Rank agreement is no better (0.23), so this is not a
+calibration artefact of their different scales (means 0.19 vs 0.46) — they are
+not ranking the same regions the same way. Asked which edits *failed*
+(`sc_success < 20`), they agree on 60.3% of regions and their failed sets overlap
+at **Jaccard 0.479**: 563 regions both call failed, 396 only InternVL, 216 only
+Qwen.
+
+**Lead with kappa, not Pearson.** Given how binary the scale is (see SCOPE), a
+correlation is the wrong headline statistic, and the rails *inflate* r rather
+than attenuating it: restricting to regions where both judges are off the rails
+(`0 < reward < 0.95`, n=275) drops Pearson to **0.094** and Spearman to 0.179.
+Cohen's kappa on the binarised failed/not-failed call is **0.203** — "slight"
+agreement on the standard scale. That is the number to report.
+
+This is the one cross-family statement the second judge can carry despite failing
+the perception control, because it needs no sensitivity to damage: it is about
+two judges disagreeing on *clean* edits. A judge that barely registers the
+stimulus is still entitled to an opinion about edit quality, and the finding is
+that the two opinions do not match.
+
+This strengthens the main result rather than complicating it. The audit shows the
+per-region number does not track the region; this shows it does not track
+anything stable across judges either. A policy trained against one of these
+judges is fitting that judge, not image quality.
+
+Under `noimg` the correlation goes **negative**. With no image each judge falls
+to its own constant default, so the little variation left comes from the
+instruction text alone, and the two read it in opposite directions.
+
+Caveat for the report: clean controls only, so this is agreement about *edit
+quality*, not about damage. The `main` parquets would give the corrupted-variant
+version and are already committed if anyone wants it.
+
+### The pilot was directionally wrong on both cosmetic axes
+
+At 4 photographs per cell the pilot reported `enhance` at -0.064 with 0.0 gain on
+failed edits, and `enhance_target` giving the lifted region **less** than its
+neighbours. Neither survived at 100 per cell: the first is ~0, the second
+reverses sign. Only `noimg`, whose effect is an order of magnitude larger than
+either, came through unchanged. That contrast is the argument for why the rerun
+was worth the GPU hours, and it is worth one line in the report's methods.
+
+### `noimg` parses at 91.2%, and the reason matters
+
+Every other condition parses at 100%. `scripts/diagnose_parse.py` attributes 37
+of 39 failures to `finish_reason=length`: with no image to ground on, the model
+loops in the free-form `reasoning` field — repeating a sentence, or inventing a
+60-item rubric — until it hits the token cap. Not a harness fault, and raising
+the cap would only buy longer loops.
+
+Two consequences to state. First, it is itself a result: shown nothing, the judge
+still returns confident schema-valid per-region scores 91% of the time, and fails
+by rambling rather than by refusing. Second, the truncations concentrate on bases
+with many regions, so `noimg`'s parsed subset leans toward simpler scenes. Quote
+the 91.2% alongside the gain.
+
+### Both judges, same verdict (InternVL3-2B added 2026-09-29 20:31)
+
+The second family ran the identical 476 controls under the identical four
+presentations, on the same VM, at `--gpu-util 0.60` (0.89 OOMs a 2B model — see
+[`DECISIONS.md`](DECISIONS.md)).
+
+| | Qwen3-VL-8B | InternVL3-2B |
+|---|---|---|
+| `baseline` mean `reward` | 0.495 | 0.270 |
+| `noimg`, all regions | **+0.219** | **+0.167** |
+| `noimg`, failed edits | **+0.591**, 94% rose | **+0.323**, 67% rose |
+| `noimg`, ok edits | -0.107 | +0.052 |
+| blind default `phi` | 18.8 | 20.4 |
+| `enhance` | -0.002 | -0.005 |
+| `enhance_target` | +0.002 | +0.0004 |
+| `noimg` parse rate | 91.2% | 100% |
+| `n_bases`, failed cell | 97-99 | 110 |
+
+**The blind default is the one result the second judge can support.** Both judges
+answer a request with no image by falling back on a high default — `phi` ~19 and
+~20 out of 25 — and both defaults survive selection by the *other* judge's
+opinion of which edits failed. This claim does **not** depend on the perception
+control that InternVL fails: it is about what a judge emits when shown nothing,
+which needs no sensitivity to a stimulus that was never sent. Two judges from
+different families defaulting high is therefore a fair cross-family observation,
+and it is the only one on this page.
+
+Everything else here is single-judge. The cosmetic axes are reversion in both
+judges (all four non-circular cells cover zero), and the localization comparison
+is retracted — see the banner below.
+
+Two differences worth a sentence rather than a paragraph. InternVL's baseline is
+much lower (0.270 against 0.495), so its blind default sits *above* its ok edits
+as well as its failed ones — which is why removing the image nudges ok edits
+**up** (+0.052) where Qwen's fall (-0.107). Same mechanism, different crossing
+point. And InternVL parses `noimg` at 100%: the reasoning-field looping that
+costs Qwen 8.8% of its blind responses is a Qwen behaviour, not a property of
+image-free prompts.
+
+### What this run cannot say
+
+No noise floor of its own (greedy, n=1) and no damage reference (controls only,
+nothing corrupted). Both denominators come from the 2026-09-15 pilot, over
+different photographs. The nuisance axes — `shuffle`, `subset`, `box` — are not
+in this run at all and remain at pilot n.
+
+---
+
 ## SECOND JUDGE, 2026-09-26 — a different family fails the same way
 
 InternVL3-2B (OpenGVLab) on the identical `main` manifest (hash
@@ -22,10 +303,46 @@ rather than ~0.59) and are not what is quoted here. Re-running stage 4 with
 `--min-control 0` reproduces the committed `localization_*.csv` byte-for-byte,
 which is how the cut was confirmed rather than assumed.
 
-**Headline: the non-localization result is method-level, not a Qwen artefact.**
-A model from a different team, with a different vision encoder, on the same
-photographs, also fails to attribute damage to the region we damaged — and fails
-harder.
+> **RETRACTED 2026-09-29.** This section originally read "**the
+> non-localization result is method-level, not a Qwen artefact**". It does not
+> support that. InternVL3-2B **fails the perception precondition** this project
+> requires of any judge before a flat localization result can be read as an
+> attribution failure — see "The second judge cannot see the damage" immediately
+> below. Its AUROC of ~0.50 is the expected value for a judge that cannot see
+> the stimulus, not evidence about the protocol. **The single-judge caveat
+> stands**: every localization claim in this document is Qwen3-VL-8B only.
+> The numbers below are kept because they are real measurements of what
+> InternVL did; only the inference drawn from them is withdrawn.
+
+### The second judge cannot see the damage (why the above is retracted)
+
+The `main` entry's whole logic is that a flat per-region result is readable as an
+*attribution* failure **only after** showing the judge perceives the corruption —
+that is what `scripts/pq_response.py` exists for. That control was never run on
+InternVL3-2B. Run now (`pq_response_internvl.csv`, same 5,236 variants):
+
+| | Qwen3-VL-8B | InternVL3-2B |
+|---|---|---|
+| control AES, mean of 25 | 19.2 | **7.17** |
+| between-base SD of control AES | 3.36 | **0.67** |
+| dAES, noise s3 (the loudest stimulus) | **-2.68** | **-0.109** |
+| dAES, jpeg s1 (the quietest) | -0.06 | -0.011 |
+| share of variants where AES fell, noise s3 | **62%** | 24% |
+| per-region `phi` exactly 0 | 42% | **63%** |
+
+InternVL's image-level response to the strongest corruption is **25x smaller
+than Qwen's** and barely separable from its response to the mildest. Its
+`d_naturalness` is *positive* for most corruptions — damage nominally improves
+its naturalness score, which is noise, not perception. It rates every image
+around 7/25 with almost no between-image spread.
+
+There is also **no positive control** for InternVL: the obeyed-vs-ignored probe
+recorded under "Settled judge behaviour" was run on Qwen only.
+
+A judge that does not register the stimulus cannot inform on attribution. To make
+a cross-family claim, the second family has to pass this control first — that is
+a GPU run, not a rewording, and it is now the honest top item for anyone who
+wants the stronger statement.
 
 ### Why 2B, and what that costs the claim
 
@@ -74,7 +391,10 @@ Qwen figures reproduce the main entry's exactly, on the same variants.)
   is *above* the untouched regions' in all nine cells, and its mean per-region
   `phi` delta on the target is slightly *smaller* than on untouched regions
   (sev 1 -1.296 vs -1.323; sev 3 -1.555 vs -1.677; remove -2.867 vs -2.928).
-  That is zero spatial information, not weak information.
+  **Do not read this as "zero spatial information" — it is what a judge that
+  cannot see the stimulus at all must produce.** InternVL fails the perception
+  control (dAES -0.109 against Qwen's -2.68), so these cells measure the
+  instrument, not the protocol.
 - **Different in degree.** Qwen has the weak-but-nonzero signal the main entry
   describes (target `phi` delta -3.755 vs -2.377 on `remove`, ~1.6x); InternVL
   has none, and is more globally coupled on every measure (R^2 0.718 vs 0.562,
@@ -168,6 +488,14 @@ noise s3 drops the target 76% of the time — it just does not react *selectivel
 
 ### 2. AUROC ~0.52-0.54: weak spatial information, not zero
 
+**Quote this instead of the AUROC where you can.** Among variants where exactly
+one region's score moved at all, the mover was the region we damaged **40.5% of
+the time (n=699, 95% CI +/-3.6%) against a chance rate of 31.7%** (`reward`:
+38.9% of 535, chance 32.1%). Same conclusion as the AUROC, but legible: the
+signal is real, and it is small. On a scale that is 86% two-valued (see SCOPE at
+the top), a rank statistic like AUROC is hard to interpret and easy to attack;
+a counting statistic is neither.
+
 Localization AUROC, floor-excluded (0.5 = none):
 
 | readout | sev 1 | sev 3 | remove |
@@ -221,8 +549,10 @@ slightly from the `none` baseline (13.57 / 13.39 clean; ~12.2 / ~11.8 under
 target mean delta -1.55 vs -1.26) but with 76-88% ties it does not localise
 either. The mean target effect on `reward` is |delta| = 0.028, against a
 between-variant SD of clean controls of **0.408** — the effect is a fraction of
-the base-to-base spread. 39% of `reward` values sit on a rail (0 or ~0.98): many
-edits genuinely failed or maxed out.
+the base-to-base spread. 42.1% of `reward` values sit at exactly 0 and four
+values cover 82.1% of all of them; `phi` is 85.6% two-valued. See the scope
+section at the top of this file — the scale is effectively binary, and that
+conditions everything in this entry.
 
 ### Caveats and scope for the report (state all of these)
 
@@ -381,6 +711,12 @@ re-run any of it.
 
 ## NUISANCE AND EXPLOITABILITY SWEEP, 2026-09-15 — first measurement
 
+> **Superseded for the three exploit axes** by the 2026-09-29 run at 150 bases —
+> see the top of this file. Two of the three numbers below reversed. This section
+> remains the source for the **nuisance** axes (`shuffle`, `subset`, `box`), the
+> **noise floor** and the **damage reference**, none of which a controls-only
+> manifest can produce.
+
 `mcvgpu2025s-0043`, pilot profile: 5 bases, 16 regions, 80 variants,
 Qwen3-VL-8B, greedy, plus a `T=0.7 n=5` floor run over the same variants. Eight
 conditions; parse 100% on every greedy run, 99.5% on the floor.
@@ -461,9 +797,16 @@ single *image-level* term multiplying every region of that image. **Part of each
 measured. Within one image it cancels from region-to-region comparisons; across
 variants it does not. Worth a paragraph in the report.
 
-The `enhance` presentation tests it directly: a global cosmetic lift that
+The `enhance` presentation tested it directly: a global cosmetic lift that
 improves no edit should, if that reading is right, raise every region's reward
 through `AES` alone.
+
+**It does not.** At 150 bases (2026-09-29) `enhance` moves mean `reward` by
+-0.002 and `enhance_target` by +0.002, both far below the 0.114 noise floor. The
+factor is real and in the equation, but this judge does not reward a cosmetic
+lift enough to move `AES`, and on a failed edit it structurally cannot: `phi = 0`
+times any `AES` is still 0. Report the factor as an architectural property of
+Eq. (3), not as a demonstrated exploit.
 
 ---
 
