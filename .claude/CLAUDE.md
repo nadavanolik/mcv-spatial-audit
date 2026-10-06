@@ -4,9 +4,9 @@ Read this before changing anything. It carries the rules and the current state.
 The evidence behind them lives in two companion files — read the relevant one
 before questioning a default or re-opening a settled question:
 
-- **[`docs/DECISIONS.md`](docs/DECISIONS.md)** — why the harness is what it is:
+- **[`docs/DECISIONS.md`](../docs/DECISIONS.md)** — why the harness is what it is:
   hardware derivations, settled questions, bug history, per-stage verification.
-- **[`docs/FINDINGS.md`](docs/FINDINGS.md)** — what we measured about the judge:
+- **[`docs/FINDINGS.md`](../docs/FINDINGS.md)** — what we measured about the judge:
   pilot verdict, retired hypotheses, numbers for the report.
 
 ## The project
@@ -97,7 +97,7 @@ five VMs.**
 | `/dev/shm` | Scratch for regenerated variants. Nothing large goes on `/`. |
 
 Every number above was measured; the derivations are in
-[`docs/DECISIONS.md`](docs/DECISIONS.md).
+[`docs/DECISIONS.md`](../docs/DECISIONS.md).
 
 ## Invariants — do not undo these
 
@@ -177,6 +177,8 @@ scripts/nuisance_report.py    paired-delta analysis across presentations, with
                         bootstrap intervals over photographs  [CPU]
 scripts/judge_agreement.py    do two judges agree on the same image? the only
                         analysis that spans judges  [CPU]
+scripts/make_figures.py       report figures + tie-rate table, drawn from the
+                        committed results/ CSVs only  [CPU]
 
 tests/test_determinism.py   5 determinism properties
 tests/test_stage0.py        selection logic via a stub COCO (no pycocotools)
@@ -188,6 +190,13 @@ tests/test_syntax.py        every file parses; GPU modules import without torch
 config.yaml             pilot / main / nuisance150 / full_cross profiles
 requirements.txt        core, every machine (determinism-critical pins)
 requirements-{judge,editor,coco}.txt   role add-ons, each -r requirements.txt
+
+results/README.md       index: every report number -> the CSV it comes from
+results/*/REPRODUCE.md  exact commands per run (all re-run 2026-10-06, match)
+results/figures/        output of make_figures.py
+.claude/CLAUDE.md       this file (moved out of the root 2026-10-06 so the
+                        public repo opens on README.md)
+docs/internal/TEAM_BRIEF.md   teammate status page
 ```
 
 ## Current state
@@ -223,7 +232,7 @@ the first-pass 22%-vs-68% was AES-inflated). Scope limit to keep loud: base
 Qwen3-VL-8B + the A.4.3 prompt, **not** the fine-tuned SFReward model or its
 Gemini teacher. Numbers, raw parquets and `REPRODUCE.md` are in
 `results/main_2026-09-18/`; `scripts/pq_response.py` is the new perception check;
-full account in [`docs/FINDINGS.md`](docs/FINDINGS.md). What remains is the
+full account in [`docs/FINDINGS.md`](../docs/FINDINGS.md). What remains is the
 write-up, not the harness.
 
 **Exploitability at 150 bases is DONE** (2026-09-29, `mcvgpu2025s-0004`): the
@@ -283,7 +292,7 @@ have manufactured a result.
 
 Numbers and raw parquets in `results/exploit_150_2026-09-29/` (`qwen/`,
 `internvl/`, `agreement/`, plus `exploit_gain.png` per judge); full account in
-[`docs/FINDINGS.md`](docs/FINDINGS.md).
+[`docs/FINDINGS.md`](../docs/FINDINGS.md).
 
 Downloaded, unpacked and built into a pilot manifest on `mcvgpu2025s-0043`
 (2026-09-15): `bases.json` holds 150 bases, pilot takes 5 with 16 regions -> 80
@@ -293,7 +302,7 @@ variants, all 80 rendered by stage 2 and built into requests by `--dry-run`.
 `mcvgpu2025s-0050`): stage 0 -> 1 -> manifest -> 2 -> 3 -> 4 on 100 base specs,
 5 edited, 75 pilot variants judged and analysed. Parse rate 100%, region
 coverage 100%. **The go/no-go pilot returned GO** — see
-[`docs/FINDINGS.md`](docs/FINDINGS.md). Those base ids are dead: the split
+[`docs/FINDINGS.md`](../docs/FINDINGS.md). Those base ids are dead: the split
 changed and every id changed with it.
 
 All five test suites pass on the laptop. Cross-VM determinism is confirmed on
@@ -323,13 +332,13 @@ All five test suites pass on the laptop. Cross-VM determinism is confirmed on
   on any new judge BEFORE writing up its localization numbers.
 - The `score_preserve` overediting question is now partly answered — the main run
   shows the axis moves but does not localise (see
-  [`docs/FINDINGS.md`](docs/FINDINGS.md)). The direct removal-vs-recolour
+  [`docs/FINDINGS.md`](../docs/FINDINGS.md)). The direct removal-vs-recolour
   `sc_preserve` comparison on the parquet is still unrun.
 
 The layout-drift confound is **resolved, not outstanding**: the `main`
 drift-robustness split agrees across all-150 and layout-survived subsets, so the
 source-coordinate masks do not manufacture the null. See the current-state
-paragraph above and [`docs/FINDINGS.md`](docs/FINDINGS.md).
+paragraph above and [`docs/FINDINGS.md`](../docs/FINDINGS.md).
 
 **Do next, in order:**
 
@@ -348,12 +357,12 @@ paragraph above and [`docs/FINDINGS.md`](docs/FINDINGS.md).
 7. Optional: the `T=0.7 n=5` noise-floor run, a large-region check
    (`area_bin: half`, since `main` used only `full` at mean 4.5% area), and the
    nuisance axes at 150 bases. Full rationale for all of these is in
-   `TEAM_BRIEF.md` "Recommended strengthening".
+   `docs/internal/TEAM_BRIEF.md` "Recommended strengthening".
 
 ## Do not re-litigate
 
 Each was measured, not argued. The evidence is in
-[`docs/DECISIONS.md`](docs/DECISIONS.md).
+[`docs/DECISIONS.md`](../docs/DECISIONS.md).
 
 - **`--gpu-util 0.89`.** The window is (0.861, 0.901) and both ends fail.
 - **Stage 1 `--offload sequential`.** Model-level offload cannot fit, ever — the
@@ -406,9 +415,9 @@ anything, decide which one it belongs in.
 
 | | Audience | Contains | Does NOT contain |
 |---|---|---|---|
-| `README.md` | anyone who opens the repo | what the project is, layout, requirements, installation, pipeline, usage, testing, reproducibility caveats | findings, assignments, timeline, status |
-| `TEAM_BRIEF.md` | the four other students | plain-language explanation, current status, what the pilot found, **their missions**, decisions to make together, VM gotchas, timeline | setup commands (link to README), implementation detail, measurement tables |
-| `CLAUDE.md` | future Claude Code sessions | the rules, the constraints, current state, what not to re-litigate | evidence, derivations, history, anything a human needs to copy-paste |
+| `README.md` | anyone who opens the repo | what the project is, a CPU-only reproduce quickstart, layout, requirements, installation, pipeline, usage, testing, reproducibility caveats | findings (point to `results/README.md` instead), assignments, timeline, status |
+| `docs/internal/TEAM_BRIEF.md` | the four other students | plain-language explanation, current status, what the pilot found, **their missions**, decisions to make together, VM gotchas, timeline | setup commands (link to README), implementation detail, measurement tables |
+| `.claude/CLAUDE.md` | future Claude Code sessions | the rules, the constraints, current state, what not to re-litigate | evidence, derivations, history, anything a human needs to copy-paste |
 | `docs/DECISIONS.md` | future Claude Code sessions, and anyone questioning a default | every measurement behind a constraint, every settled question and why, bug history, per-stage verification record | current state, task lists |
 | `docs/FINDINGS.md` | whoever writes the report | pilot verdict, retired hypotheses, judge behaviour, the numbers and their caveats | harness decisions, setup |
 

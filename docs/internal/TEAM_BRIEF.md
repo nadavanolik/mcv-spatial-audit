@@ -1,7 +1,7 @@
 # Team brief
 
 Updated 2026-09-18. Start here — this is the plain-language version.
-Setup commands, repo structure and constraints live in [`README.md`](README.md).
+Setup commands, repo structure and constraints live in [`README.md`](../../README.md).
 
 ---
 

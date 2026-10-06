@@ -13,8 +13,36 @@ score every region. We hold per-region ground truth the judge does not, so any
 mismatch between where we corrupted and where the score reacts is directly
 measurable. Inference only — no training.
 
-**Status:** pipeline verified end to end; the go/no-go pilot returned GO. See
-[`TEAM_BRIEF.md`](TEAM_BRIEF.md) for current state, findings and assignments.
+## Results
+
+All runs are complete. The raw judge scores are committed under
+[`results/`](results/), and [`results/README.md`](results/README.md) maps every
+number and figure in the report to the CSV it comes from.
+
+### Reproduce the report's numbers (CPU only, no GPU, minutes)
+
+The judging needs A10 GPUs, but everything downstream of it runs on a laptop
+from the committed score parquets:
+
+```bash
+git clone https://github.com/nadavanolik/mcv-spatial-audit.git && cd mcv-spatial-audit
+python -m venv .venv && source .venv/bin/activate   # Python 3.12
+pip install -r requirements.txt
+
+# main run, Qwen3-VL-8B, floor-excluded headline tables
+python -m src.stage4_analyze --scores 'results/main_2026-09-18/scores_shard*.parquet' \
+    --out out/main --all-readouts --min-control 0
+
+# both judges side by side
+python -m src.stage4_analyze --scores 'results/*/scores_shard*.parquet' \
+    --out out/two_judge --all-readouts --min-control 0
+
+# report figures and the tie-rate table
+python -m scripts.make_figures
+```
+
+Each folder's `REPRODUCE.md` has the full set of commands, including the
+GPU-side runs that produced the parquets.
 
 ## Repository layout
 
@@ -39,17 +67,22 @@ scripts/smoke_judge.py    one real judge call on synthetic images   [judge VM]
 scripts/diagnose_parse.py why judge responses failed, from a parquet     [CPU]
 scripts/nuisance_report.py  nuisance + exploitability, across presentations [CPU]
 scripts/judge_agreement.py  cross-judge agreement on identical inputs [CPU]
+scripts/pq_response.py    does image-level quality react to the damage?  [CPU]
+scripts/make_figures.py   report figures and tables from results/ CSVs   [CPU]
 scripts/verify_corruption.py  did the corruption damage the image, and
                           only inside the mask?                         [CPU]
 scripts/verify_determinism.sh  cross-VM hash check
 scripts/verify_edit_drift.py  did stage 1 keep the layout the masks describe?
 
 tests/                    5 suites, all CPU, all run in seconds
-config.yaml               pilot / main / full_cross profiles
+config.yaml               pilot / main / nuisance150 / full_cross profiles
 
+results/                  committed raw scores + every analysis table; see
+                          results/README.md
 docs/DECISIONS.md         why the harness is what it is: measurements behind
                           every constraint, settled questions, bug history
 docs/FINDINGS.md          what we measured about the judge, and its caveats
+docs/internal/            team coordination notes (status, assignments)
 ```
 
 ## Requirements
@@ -74,7 +107,7 @@ are hard to diagnose:
 ## Installation
 
 ```bash
-git clone <repo> mcv-spatial-audit && cd mcv-spatial-audit
+git clone https://github.com/nadavanolik/mcv-spatial-audit.git && cd mcv-spatial-audit
 python -m venv .venv && source .venv/bin/activate
 bash scripts/setup.sh <role>      # judge | editor | coco | core
 ```

@@ -2,7 +2,7 @@
 
 What we have measured about the judge, and what belongs in the report. Harness
 decisions live in [`DECISIONS.md`](DECISIONS.md); the plain-language version for
-teammates is [`../TEAM_BRIEF.md`](../TEAM_BRIEF.md).
+teammates is [`internal/TEAM_BRIEF.md`](internal/TEAM_BRIEF.md).
 
 ---
 
