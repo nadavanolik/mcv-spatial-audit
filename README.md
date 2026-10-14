@@ -244,8 +244,9 @@ finishes. Set `KEEP_SCRATCH=1` while iterating on stage 3.
 Judging is **greedy** (`--temperature 0 --n-samples 1`), passed explicitly by
 `run_shard.sh` and matching `stage3_judge`'s own defaults. Like `--gpu-util` it
 must be identical on every VM, so there is no environment-variable override.
-The one sampled run — which is what supplies the noise floor, since greedy has
-no within-variant spread — is a separate command with its own `--out`.
+Greedy is not bit-deterministic under vLLM batching: identical requests differ
+~6-11% of the time on `reward`, and `scripts/nuisance_report.py` takes its noise floor from
+those repeats. A sampled run is a separate command with its own `--out`.
 
 ### Nuisance and exploitability
 
@@ -281,8 +282,9 @@ Three things about that recipe are load-bearing:
   bases with `corruptions: [none]` — 476 clean controls, 952 requests per
   condition, ~3h per judge for `baseline`, `noimg`, `enhance`, `enhance_target`.
   Clean controls are what the exploit question needs: an edit that already went
-  wrong, with nothing corrupted. The nuisance axes cannot use it — their
-  `vs_damage` denominator needs corrupted variants — so they stay on `pilot`.
+  wrong, with nothing corrupted. The nuisance axes use it too, taking their
+  `vs_damage` denominator from the main run with `--damage-scores` (see
+  `results/nuisance_150_2026-10-14/REPRODUCE.md`).
   A small judge also needs `--gpu-util 0.60`; 0.89 is an 8B number and OOMs a 2B
   model during sampler warmup.
 - **Stage 2 and stage 3 must run in one login session.** `RemoveIPC=yes` wipes

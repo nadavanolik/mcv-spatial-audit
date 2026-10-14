@@ -1,6 +1,6 @@
 # Team brief
 
-Updated 2026-09-18. Start here — this is the plain-language version.
+Updated 2026-10-14. Start here — this is the plain-language version.
 Setup commands, repo structure and constraints live in [`README.md`](../../README.md).
 
 ---
@@ -259,6 +259,60 @@ Qwen rambled its way out of 9% of them.
 
 Numbers in `results/exploit_150_2026-09-29/`.
 
+### Does the way we ask matter? Rerun on all 150 photos (2026-10-14)
+
+The last test still sitting at five photos. We asked the judge about the same
+clean edits again, changing only how the question was packaged: listing the
+regions in a different order, leaving one irrelevant region off the list, or
+drawing boxes around the regions.
+
+- **Shuffling the list moves the score more than twice as much as actually
+  damaging a region** — and shuffling changes no pixel at all. This holds
+  however we slice the numbers.
+- **Leaving one region off the list moves it about as much as damage, or a bit
+  more. Drawing the boxes moves it about as much as damage.** Counting every
+  region, both look like one and a half times — but that count includes regions
+  the editor had already failed on, which can go up under a rewording and can't
+  go down under damage. Leave those out and they come to about as much as
+  damage. Quote it that way.
+- **It really is the reordering.** About one shuffle in eight happened to come
+  out in the original order, so it was the exact same question again. Those
+  scores barely moved. The reordered ones moved a lot.
+- **The position itself doesn't matter.** Regions don't score better for being
+  first on the list. Any rewording just sends the judge down a different line of
+  reasoning, and on a score that is almost always 0 or 25, a different line of
+  reasoning often means a flipped score.
+
+Plain version for the talk: **just reordering the list of regions moves the
+per-region score more than breaking the region does.**
+
+**The second judge does it too.** We ran InternVL on the same three tests the
+same evening. We can't compare it to damage, because it barely notices damage.
+But we can ask whether reordering moves its scores more than its own random
+wobble, and it clearly does. So "reordering the list changes the per-region
+score" holds for two different model families, like the blind-default and the
+judges-disagree results. For InternVL, dropping a region also counts, on the
+regions the editor didn't already fail; drawing boxes doesn't clearly count.
+
+This was cheaper than we had said. We thought it needed the damaged pictures
+re-judged, about four times the GPU time. It didn't: the main run had already
+measured what damage does on the same photos, so only the 476 clean edits needed
+re-judging. Three conditions, under two hours on one VM.
+
+### The judge doesn't always give the same answer to the same question
+
+Found while checking the above. Each photo's clean edit gets asked about several
+times, word for word the same. Even with randomness switched off, **about one
+answer in twelve comes back different**. Asking again on another day adds
+nothing on top of that; another machine adds a little (about one in nine).
+
+Why it doesn't hurt us: damaging a region moves the score three to five times
+more than this wobble, so the main result is measuring something real. And it is
+the noise ruler we said we were missing: we now have it on all 150 photos,
+without a separate run.
+
+Numbers in `results/nuisance_150_2026-10-14/`.
+
 ---
 
 ## YOUR MISSIONS
@@ -301,7 +355,7 @@ CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8
 | Role | Where it stands | Next |
 |---|---|---|
 | **Editor VM** | done - 150 photos edited and published as `bases.tar.gz` | Nothing blocking. The VM still holds FLUX, so it is the one to use if any base ever needs re-editing |
-| **Judge harness** | done - main run judged all 150 photos, 100% parse; fooling test rerun on all 150 on 2026-09-29 | Nothing blocking. Only the "does the order matter" half is still at five photos |
+| **Judge harness** | done - main run judged all 150 photos, 100% parse; fooling test rerun on all 150 on 2026-09-29; packaging test on all 150 on 2026-10-14 | Nothing blocking. Every test is now at 150 photos |
 | **Corruption + manifest** | determinism confirmed on 4 of 5 VMs | Chase the last one. Own `config.yaml` |
 | **Analysis** | main run analysed, result is in `results/main_2026-09-18/` | **Figures + write-up - this is the critical path now.** Tie-rate and coherence tables are the headline, not AUROC |
 | **Second judge** | attempted - InternVL3-2B judged the same 150 photos, but it barely reacts to the damage at all, so its flat result does not count as evidence | **Still the top strengthening job.** Find a family that passes the can-it-see-the-damage check first |
@@ -333,7 +387,11 @@ model — their 8B doesn't fit our card and there's nothing in between — is wh
 made this likely; a different family with a mid-size model is the thing to look
 for.
 
-**2. The noise-floor run (temperature 0.7, 5 samples).** We asked the judge once,
+**2. The noise-floor run (temperature 0.7, 5 samples) — NO LONGER NEEDED for
+the ruler (2026-10-14).** The repeated identical questions already inside our
+runs give the judge's self-disagreement on all 150 photos; see "The judge
+doesn't always give the same answer" above. What follows is the original case
+for it. We asked the judge once,
 deterministically. This asks it the *same* question 5 times with randomness on, to
 measure how much it disagrees with *itself*. Why it matters: it gives us a ruler —
 any effect smaller than the judge's own random wobble is not a real signal, so
@@ -344,10 +402,12 @@ regardless of localization). Effort: low — same photos, same harness, differen
 flags, a few hours on one VM.
 
 **3. A large-region check (optional).** Our damaged regions averaged 4.5% of the
-image — small. This tests bigger regions (half the image). Why it matters:
-pre-empts "of course it can't spot a tiny 4.5% blur; try something obvious." If it
-*still* can't localise big damage, the finding is bulletproof. Effort: low —
-there is already a config setting for region size.
+image — small. Why it matters: pre-empts "of course it can't spot a tiny 4.5%
+blur; try something obvious." If it *still* can't localise big damage, the
+finding is bulletproof. Effort: low, and no GPU — our objects already range from
+2% to 25% of the image, so split the main run's results by object size. (The
+config's "half"/"quarter" setting is not this: it damages *less* of each region,
+not bigger regions.)
 
 **4. The fooling tests on 150 — HALF DONE 2026-09-29.** The three "can it be
 fooled" tests (hide the image, prettify it, prettify only the target region) now
@@ -356,17 +416,14 @@ is reportable; both prettifying tests turned out to do nothing, and at five
 photos they had pointed the wrong way. Numbers in
 `results/exploit_150_2026-09-29/`.
 
-What is **not** done is the other half: shuffling the region order, dropping a
-region from the list, and drawing boxes. Those compare against how much real
-damage moves the score, so they need damaged pictures, which this run
-deliberately did not have. That matters because shuffling the list currently
-looks like it moves scores *more* than real damage does — a striking claim
-resting on five photos. Effort: higher than the exploit half, roughly four times
-the GPU hours, since the manifest has to carry corruptions again.
+The other half — shuffling the region order, dropping a region from the list,
+drawing boxes — is **DONE 2026-10-14** on all 150 photos, and the five-photo
+claim held up for shuffling: it moves the score more than twice as much as real
+damage. Dropping a region or drawing boxes moves it about as much as damage.
+It did not need damaged pictures after all; see above.
 
-**#1 and the exploit half of #4 are done.** Of what's left, #2 (the noise floor)
-is the cheap, high-value pick — it turns "the effect is tiny" into "the effect is
-smaller than the judge's own noise". Nothing here blocks the write-up.
+**#1, #2 and #4 are done or answered.** What's left is #3 (bigger regions) and a
+second judge that can see the damage. Nothing here blocks the write-up.
 
 ---
 
@@ -522,7 +579,8 @@ planning around it.
   done 2026-09-18, and it answered the question.**
 - **Week 3 — done.** Second judge family **done 2026-09-26**; fooling test rerun
   on all 150 photos **done 2026-09-29**.
-- **Week 4 (now)** — figures, LaTeX, repo cleanup. This is the only critical
+- **Week 4 (now)** — packaging test on all 150 photos **done 2026-10-14**;
+  figures, LaTeX, repo cleanup. This is the only critical
   path left; every measurement the report needs already exists.
 - **Week 5** — buffer and the 5-minute talk. Don't plan work here.
 

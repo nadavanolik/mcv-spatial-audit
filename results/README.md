@@ -12,7 +12,8 @@ to it. Each run folder has a `REPRODUCE.md` with the exact commands.
 | [`internvl3_2b_2026-09-26/`](internvl3_2b_2026-09-26/) | Raw scores only: the same 5,236 variants judged by a second model | InternVL3-2B | 22,176 scored regions |
 | [`two_judge_2026-09-26/`](two_judge_2026-09-26/) | Analysis of both judges side by side, built from the two folders above | both | - |
 | [`exploit_150_2026-09-29/`](exploit_150_2026-09-29/) | Exploitability: the 476 clean edits re-judged under 4 presentations (`baseline`, `noimg`, `enhance`, `enhance_target`), plus cross-judge agreement | both | 8,064 rows per judge |
-| [`nuisance_pilot_2026-09-15/`](nuisance_pilot_2026-09-15/) | Early pilot of the presentation sweep on 5 photos. Superseded by `exploit_150` for the exploit axes; still the only run of `shuffle`/`subset`/`box` | Qwen3-VL-8B | 5 photos |
+| [`nuisance_150_2026-10-14/`](nuisance_150_2026-10-14/) | Nuisance: the 476 clean edits re-judged under `shuffle`, `subset`, `box`, against the exploit run's baseline; damage reference from `main` | both (InternVL under `internvl/`) | 476 clean controls per condition |
+| [`nuisance_pilot_2026-09-15/`](nuisance_pilot_2026-09-15/) | Early pilot of the presentation sweep on 5 photos. Superseded by `exploit_150` (exploit axes) and `nuisance_150` (nuisance axes) | Qwen3-VL-8B | 5 photos |
 | [`figures/`](figures/) | Report figures and tables, drawn from the CSVs above by `scripts/make_figures.py` | - | - |
 
 ## Where each report number comes from
@@ -28,6 +29,11 @@ to it. Each run folder has a `REPRODUCE.md` with the exact commands.
 | 3.3 Robustness | layout-drift split | `main_2026-09-18/drift_robustness.csv` |
 | Exploitability | blind (`noimg`) and cosmetic gains, with bootstrap intervals | `exploit_150_2026-09-29/{qwen,internvl}/exploitability.csv` |
 | Judge agreement | Cohen's kappa, Jaccard, correlation between the two judges | `exploit_150_2026-09-29/agreement/` |
+| Nuisance | score change under `shuffle` / `subset` / `box` as a ratio of real damage, with paired photo-bootstrap intervals; headline is floor-excluded | `nuisance_150_2026-10-14/floor_excluded/nuisance.csv` (`phi/` for `phi`; the parent folder has the all-region cut) |
+| Nuisance | list-position effect within a photo | `nuisance_150_2026-10-14/slot_effect.csv` |
+| Nuisance | identity shuffles (request unchanged) vs reordered: the null inside the run | `nuisance_150_2026-10-14/identity_null.csv`; InternVL in `internvl/` |
+| Nuisance, cross-family | InternVL against its own noise (never against damage) | `nuisance_150_2026-10-14/internvl/` (`floor_excluded/`, `phi/`) |
+| Noise floor | greedy disagreement between byte-identical requests | `nuisance_150_2026-10-14/report.txt` |
 
 `scripts/make_figures.py` writes `figures/fig_localization.png`,
 `figures/fig_tie_rate.png` and `figures/tab_tie_rate.tex`:

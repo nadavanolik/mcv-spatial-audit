@@ -1,0 +1,107 @@
+loaded 7588 rows from 4 shards, judges=['Qwen/Qwen3-VL-8B-Instruct']
+parse rate: 100.0%
+
+=== conditions ===
+presentation  rows  parse_rate  scored  reward
+    baseline  1540         1.0     1.0     1.0
+         box  1540         1.0     1.0     1.0
+     shuffle  1540         1.0     1.0     1.0
+      subset  1064         1.0     1.0     1.0
+
+=== noise floor, reward (identical baseline requests) ===
+  2316 pairs of byte-identical requests in one greedy run
+  mean |delta| 0.0191, unchanged 92.5%
+  vs_floor below is against this mean |delta|.
+loaded 22176 rows from 5 shards, judges=['Qwen/Qwen3-VL-8B-Instruct']
+parse rate: 100.0%
+  [reward] using 22171/22176 rows (5 missing this readout)
+  --min-control 0.0: kept 12635/20155 rows (62.7%)
+
+=== reference: what REAL damage does (reward) ===
+                    judge corruption severity  n_target  target_unchanged  target_dropped  target_rose  other_unchanged
+Qwen/Qwen3-VL-8B-Instruct       blur        1       284             0.539           0.306        0.155            0.576
+Qwen/Qwen3-VL-8B-Instruct       blur        3       284             0.327           0.592        0.081            0.388
+Qwen/Qwen3-VL-8B-Instruct       jpeg        1       284             0.641           0.208        0.151            0.643
+Qwen/Qwen3-VL-8B-Instruct       jpeg        3       283             0.332           0.590        0.078            0.364
+Qwen/Qwen3-VL-8B-Instruct      noise        1       284             0.609           0.243        0.148            0.610
+Qwen/Qwen3-VL-8B-Instruct      noise        3       284             0.190           0.757        0.053            0.211
+Qwen/Qwen3-VL-8B-Instruct     remove   binary       568             0.264           0.651        0.085            0.288
+Qwen/Qwen3-VL-8B-Instruct   saturate        1       284             0.648           0.229        0.123            0.654
+Qwen/Qwen3-VL-8B-Instruct   saturate        3       284             0.560           0.324        0.116            0.565
+  mean |delta| on the DAMAGED region: 0.1133
+  share of damaged regions that did not move at all: 43.7%
+
+=== NUISANCE: does a null change move the score (reward)? ===
+  vs_damage: 1.0 means a nuisance change moves the score as much as
+  real damage to the region does. text axes change NO pixels.
+presentation  kind   n  unchanged  mean_abs_delta  mean_delta  vs_damage  vs_floor  photo_mean_abs  photo_lo  photo_hi  n_bases  ratio  ratio_lo  ratio_hi
+         box image 876     0.5502          0.1322     -0.0850     1.1668    6.9350          0.1322    0.0974    0.1750      106 1.1220    0.8194    1.4854
+     shuffle  text 876     0.5400          0.2488     -0.2234     2.1964   13.0548          0.2586    0.2080    0.3113      106 2.1946    1.7198    2.8227
+      subset  text 596     0.6678          0.1406     -0.1164     1.2409    7.3753          0.1590    0.1209    0.1983      105 1.3366    0.9860    1.7468
+
+  shuffle: a change that touches no pixel moves reward by 0.2488,
+  2.20x what damaging the region does. The score is responding to
+  the packaging, not the region.
+
+  subset: a change that touches no pixel moves reward by 0.1406,
+  1.24x what damaging the region does. The score is responding to
+  the packaging, not the region.
+
+=== identity shuffles: the null inside the shuffle run (reward) ===
+  identity = canonical order kept, request byte-identical to baseline.
+                    judge     order  n_variants   n  n_bases  mean_abs_delta  photo_mean_abs  photo_lo  photo_hi  unchanged
+Qwen/Qwen3-VL-8B-Instruct reordered         277 773      104          0.2796          0.2946    0.2406    0.3519     0.4851
+Qwen/Qwen3-VL-8B-Instruct  identity          45 103       39          0.0178          0.0191    0.0013    0.0461     0.9515
+
+=== does the score follow LIST POSITION? (shuffle, reward) ===
+  Region ids are shuffled per variant, so slot and region id are
+  decorrelated. A trend across slots is position, not content.
+                    judge  slot_idx  mean   std  size  within  within_lo  within_hi
+Qwen/Qwen3-VL-8B-Instruct         0 0.392 0.407   476   0.003     -0.009      0.016
+Qwen/Qwen3-VL-8B-Instruct         1 0.423 0.422   476   0.006     -0.005      0.016
+Qwen/Qwen3-VL-8B-Instruct         2 0.369 0.419   476  -0.008     -0.019      0.003
+Qwen/Qwen3-VL-8B-Instruct         3 0.284 0.376    92  -0.002     -0.032      0.029
+Qwen/Qwen3-VL-8B-Instruct         4 0.382 0.433    20  -0.021     -0.085      0.046
+
+=== EXPLOITABILITY: can the score be pushed UP for free? ===
+  enhance is a global cosmetic lift; no edit is improved by it.
+  enhance_target is the same lift inside the target region's box only.
+  reward carries AES = min(PQ), an image-level factor; phi does not.
+  n/a -- no exploitability condition in this glob
+
+=== EXPLOIT on clean edits: failed vs ok, target vs other ===
+  failed = baseline sc_success below 20. n_bases is the
+  effective sample; regions within one photo are not independent.
+  [sc_success] using 5684/7588 rows (1904 missing this readout)
+  n/a -- needs a baseline with sc_success and an exploit condition
+
+=== is the split just reversion to the mean? ===
+  Splitting on the judge's OWN baseline and measuring change from
+  that same baseline is circular. slope -1 = the condition replaces
+  the score with a constant. If resid_* collapse to ~0, the split
+  carried nothing the slope did not.
+  [sc_success] using 5684/7588 rows (1904 missing this readout)
+
+=== local flattery: target minus other, paired within variant ===
+  enhance is the NEGATIVE CONTROL -- it lifts the whole frame, so it
+  cannot flatter one region. Its contrast is the floor; anything
+  enhance_target does not clear is not local flattery.
+
+=== multiplicity: ~0 intervals in this run, uncorrected ===
+  At 95% and this family size, roughly one null cell is expected to
+  exclude zero by chance. Treat a single exclusion as exploratory;
+  the claims worth making are the ones that survive a non-circular
+  split and are large against the reversion slope.
+
+=== the AES channel: what each condition does to image-level PQ ===
+  AES = min(PQ), so the LOWER of the two rows sets the reward.
+  A lift that raises one and lowers the other has not helped.
+       readout presentation   n  baseline_mean  condition_mean  mean_gain  frac_rose  frac_fell
+pq_naturalness          box 476         19.443          19.292     -0.151      0.069      0.107
+pq_naturalness      shuffle 476         19.443          19.485      0.042      0.008      0.000
+pq_naturalness       subset 476         19.443          19.500      0.057      0.015      0.008
+  pq_artifacts          box 476         21.326          21.702      0.376      0.212      0.168
+  pq_artifacts      shuffle 476         21.326          21.403      0.078      0.055      0.038
+  pq_artifacts       subset 476         21.326          21.330      0.004      0.050      0.050
+
+wrote results\nuisance_150_2026-10-14\floor_excluded

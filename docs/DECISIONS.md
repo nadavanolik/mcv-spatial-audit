@@ -705,6 +705,23 @@ Running the exploit axes over 150 bases therefore costs ~3h per judge; raising
 the nuisance axes to the same n means a manifest with corruptions and roughly 4x
 that.
 
+**Corrected 2026-10-14: the nuisance axes do not need a corrupted manifest.**
+The `vs_damage` denominator is what real damage does to the damaged region, and
+`main` already measured that on the same 150 photographs, controls and model.
+`nuisance_report --damage-scores` reads it from there, so the nuisance axes ran
+on `nuisance150` at the exploit run's cost (~40 min per condition). Pairing a
+new run against another run's baseline is legitimate because greedy noise is
+about the same within and across runs (next paragraph).
+
+**Greedy is not bit-deterministic (found 2026-10-14).** Under `baseline` a
+photo's 3-5 controls are byte-identical requests (target-independent prompt,
+`none` copies the edit). Greedy vLLM scores them differently: `reward` unchanged
+in 92.5% of pairs within one engine run (`0004`), 91-94% across runs on one VM
+(`main`'s shards are separate runs; identity shuffles vs the 16-day-old
+baseline), and 88.8% across VMs. That supersedes "greedy destroys the denominator" above: the floor is
+the mean |delta| between those repeats (`rerun_floor()`), and the sampled run is
+no longer needed for it.
+
 `full_cross` stays out of `--profile`'s `choices` list on purpose — that omission
 is the guardrail against running it by accident — so `nuisance150` was added
 explicitly alongside `pilot` and `main` rather than by reading the config keys
@@ -784,8 +801,7 @@ condition):
   with fewer regions.
 - **Grammar compile cost at 150 bases is fine** for the non-`shuffle` axes: each
   image condition ran ~30-45 min for 952 requests. `shuffle` at that scale
-  remains untested — it is the axis that turns one schema per base into up to
-  n!.
+  ran 2026-10-14 in ~42 min including engine start, so it is fine too.
 
 Still open:
 

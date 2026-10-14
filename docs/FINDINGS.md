@@ -42,6 +42,179 @@ practice, not 26-level.
 
 ---
 
+## NUISANCE AT 150 BASES, 2026-10-14 — reordering the region list moves the score more than damage
+
+`mcvgpu2025s-0004`, Qwen3-VL-8B (InternVL3-2B in its own subsection below),
+the `nuisance150` manifest (476 clean controls), greedy, three presentations: `shuffle` (region list reordered),
+`subset` (one non-target region dropped from the list), `box` (the regions'
+boxes drawn on both images). 100% parse on all three. Raw parquets, tables and
+commands in
+[`../results/nuisance_150_2026-10-14/`](../results/nuisance_150_2026-10-14/).
+
+**Design.** Paired per (variant, region) against the exploit run's `baseline`
+(same VM, manifest and `src/`). Clean controls are all a nuisance delta needs;
+the denominator, what real damage does to the damaged region, comes from `main`
+on the same 150 photographs (`--damage-scores`). An earlier entry claimed this
+needed a corrupted manifest at ~4x the GPU cost; it did not.
+
+**Headline, floor-excluded** (`--min-control 0`, the main run's convention:
+foreground regions whose clean score is above 0, on both sides — a region at 0
+can rise under a packaging change but cannot fall under damage, so keeping it
+tilts the comparison toward packaging). Ratio = per-photo mean |delta| over the
+per-photo damage mean, 95% CI resampling the shared photographs (106):
+
+| presentation | pixels change? | `reward` ratio to damage | `phi` ratio to damage | `reward` unchanged |
+|---|---|---|---|---|
+| `shuffle` | no | **2.20** [1.72, 2.82] | **2.62** [2.05, 3.39] | 54% |
+| `subset` | no | 1.34 [0.99, 1.75] | 1.67 [1.22, 2.21] | 67% |
+| `box` | yes | 1.12 [0.82, 1.49] | 1.07 [0.76, 1.44] | 55% |
+| *real damage, damaged region* | | *1.00* (0.113) | *1.00* (2.75) | *44%* |
+
+(`floor_excluded/nuisance.csv`, `floor_excluded/phi/nuisance.csv`.)
+
+All regions, background included (the pilot's convention): `shuffle` 2.21
+[1.79, 2.74], `subset` 1.62 [1.31, 1.98], `box` 1.56 [1.19, 2.02] on `reward`
+against a damage effect of 0.088 (`nuisance.csv`; `phi/` agrees). Every axis is
+7-13x the noise floor (0.019, below) under either cut.
+
+**Reordering the region list — which changes no pixel — moves the per-region
+score more than twice as much as damaging the region does**, under every cut
+and on both readouts. **Dropping one irrelevant region from the list moves it
+about as much as damage or somewhat more** (1.3-1.9x; the floor-excluded
+`reward` interval touches 1). **Drawing the boxes moves it about as much as
+damage**: above it only when floored regions count, indistinguishable from it
+once they are excluded. The pilot had `shuffle` 1.55x, `subset` 0.91x, `box`
+0.72x on 5 photographs, pooled over clean and damaged images; only `shuffle`'s
+"more than damage" was a firm reading then, and it is the one that holds.
+
+*Method note: a first pass read all three axes as beating damage, from the
+all-region cut and with a pooled mean quoted beside a per-photo interval. Floor
+exclusion and an interval on the ratio itself (not just its numerator) showed
+that only `shuffle` does. Quote the floor-excluded ratio.*
+
+**It is the reordering, not noise or a parser fault — two checks.**
+
+1. `shuffle` maps scores by region id, not by slot: 0 id/score mismatches across
+   all 476 responses.
+2. 58 of the 476 shuffles drew the identity permutation, so those requests are
+   byte-identical to `baseline` — a built-in null, judged 16 days apart. Their
+   foreground regions move like the noise floor (per-photo mean |delta| 0.017
+   [0.000, 0.044], 96% unchanged, 177 pairs); the 418 genuinely reordered ones
+   move 0.219 [0.182, 0.259] (62% unchanged). `identity_null.csv`.
+
+**No position effect.** Within a photograph — each region compared against its
+own score at other slots — the score does not follow list position: every slot
+within ±0.021 of zero, all intervals covering it (`slot_effect.csv`). The raw
+per-slot means do dip at slot 3 (0.28 vs ~0.39), but slots 3-4 exist only on
+4-5 region photographs, and the within-photo comparison removes it. **The
+pilot's "slot 3 averaged 0.03" was this confound.** Reordering does not favour a
+position; it scatters the scores, with a net pull of -0.067 (reordered lists
+score lower on average than the canonical order).
+
+A plausible reading, not tested: any change to the prompt text sends the judge
+down a different reasoning path, and on a scale that is ~86% two-valued (see
+SCOPE) a different path is often a flipped score.
+
+**Caveats to state.**
+
+- Controls only. Whether the damage penalty follows the region or the slot under
+  `shuffle` would need damaged variants re-judged under each axis; not
+  measured, and moot while the penalty does not land on the damaged region.
+- The denominator is from another run (`main`, VM 0050). Identical requests are
+  about as noisy across runs and VMs as within one run (below); the ratio CI
+  carries the damage side's sampling uncertainty.
+- `box` changes pixels (red outlines on both images), so it is a weaker null
+  than the two text axes.
+- Not tested: mask and crop presentation formats (never built), region area.
+
+### InternVL3-2B, same three axes (2026-10-14 21:44-22:29)
+
+Same VM, same 476 controls, `--gpu-util 0.60`, 100% parse, paired against
+InternVL's own exploit-run baseline. Results in `internvl/` under the run
+folder.
+
+**Read against its own noise only, never against damage.** InternVL fails the
+perception precondition, and its damage effect (0.041) is only ~2x its noise
+floor (0.021), so the `ratio` column in `internvl/nuisance.csv` (2-3x "damage")
+must not be quoted. What it can carry is the question that needs no perception:
+does packaging move its scores beyond its own run-to-run noise?
+
+| InternVL `reward`, per-photo mean \|delta\| [95% CI] | all regions | floor-excluded (75 photos) |
+|---|---|---|
+| `shuffle`, reordered | **0.190** [0.164, 0.217] | **0.259** [0.214, 0.305] |
+| `shuffle`, identity order (null inside the run) | 0.092 [0.045, 0.143] | 0.050 [0.007, 0.105] |
+| `subset` | 0.078 [0.062, 0.095] | **0.227** [0.184, 0.272] |
+| `box` | 0.077 [0.057, 0.096] | 0.090 [0.056, 0.129] |
+| identical requests: one run / two baseline runs (foreground) | 0.024 / 0.031 | |
+
+`phi` agrees in every cell (`internvl/phi/`, `internvl/floor_excluded/phi/`).
+
+- **Reordering moves InternVL's per-region scores beyond every noise
+  reference**, in both cuts. With Qwen this makes "reordering the region list
+  moves the per-region score" **a cross-family result** — it needs no
+  sensitivity to damage, the same reason the blind default and the
+  judge-disagreement results count across families.
+- **Dropping a region** clears every null on the floor-excluded population
+  (0.227 vs 0.050) but not on all regions, where it sits below the identity
+  null. Report it as "on the regions the editor did not already fail".
+- **Drawing boxes** does not clearly clear the identity null in either cut. Not
+  established for InternVL.
+- **InternVL's noise depends on context.** Its identity shuffles move 0.092,
+  against 0.024 within one run and 0.031 between its two baseline-style runs
+  (foreground regions; Qwen's identity shuffles: 0.017, against its 0.015). Part of that is which photos they are — the
+  same 58 variants differ by 0.058 between the two baseline runs — and part is
+  being judged among reordered neighbours. This is why the in-run identity
+  null, not the within-run floor, is the comparison for InternVL; the
+  `vs_floor` column overstates its nuisance effects.
+- **A small position effect**, unlike Qwen: within a photo, slot 1 scores 0.51
+  `phi` lower [0.25, 0.78] and slot 0 0.30 higher [0.06, 0.56]
+  (`internvl/phi/slot_effect.csv`) — an order of magnitude below the scatter a
+  reordering causes (|delta| ~6 `phi`).
+
+---
+
+## GREEDY IS NOT DETERMINISTIC, 2026-10-14 — the noise floor was in the data
+
+Under `baseline` a clean control's request does not depend on its target
+(`corruption: none` copies the edit; the instruction is per photo; the prompt
+lists every region in canonical order), so each photo's 3-5 controls are **the
+same request sent 3-5 times**. Greedy vLLM does not always answer them
+identically. `reward`, background slot included, as `rerun_floor()` in
+`scripts/nuisance_report.py` computes it:
+
+| identical requests | pairs | `reward` unchanged | mean \|delta\| |
+|---|---|---|---|
+| one engine run: exploit baseline (0004) | 2,316 | 92.5% | 0.019 |
+| one engine run: `main` pairs within a shard (0050) | 467 | 92.7% | 0.034 |
+| separate runs, same VM: `main` pairs across its 5 shards | 1,849 | 91.2% | 0.027 |
+| separate runs, same VM, 16 days apart: identity shuffles vs baseline (0004) | 235 | 94.0% | 0.017 |
+| separate VMs: `main` (0050) vs exploit baseline (0004) | 2,016 | 88.8% | 0.027 |
+
+`main` as a whole (all its pairs, mostly across shards) gives 91.5% / 0.028.
+`phi` is steadier (~95-96% unchanged) because `reward` also carries the separate
+PQ request's noise. The likely mechanism is batch composition changing bf16
+reductions enough to flip an argmax near-tie early in a 1536-token reasoning
+field — a hypothesis, not verified.
+
+**What this corrects.** Earlier text here says greedy has "no within-run noise
+floor" and that ties are "not sampling noise". Both are wrong: about 6-11% of
+identical requests change `reward`. The corrections are inline below.
+
+**What it does not change.** Real damage moves the damaged region 2.6-4.6x the
+floor (0.088 vs 0.019-0.034), so the main run measures something. Target and
+untouched regions carry the same noise, so "the damaged region is no more
+likely to move" is unaffected. The exploit conclusions stand: `enhance` and
+`enhance_target` sit inside the floor, and `noimg` (+0.21) is ~11x it. A separate
+run on the same VM adds nothing measurable and a different VM adds a little,
+which is what makes pairing a new run against an old baseline legitimate.
+
+This is the proposal's promised noise floor at 150 photographs, measured
+without a sampled run. It is a different statistic from the pilot's 0.114
+(median SD across T=0.7 samples on 5 photographs); quote this one for any
+greedy result.
+
+---
+
 ## EXPLOITABILITY AT 150 BASES, 2026-09-29 — one exploit survives, two die
 
 `mcvgpu2025s-0004`, the `nuisance150` profile: 150 bases, **476 clean controls,
@@ -257,6 +430,12 @@ presentations, on the same VM, at `--gpu-util 0.60` (0.89 OOMs a 2B model — se
 | `noimg` parse rate | 91.2% | 100% |
 | `n_bases`, failed cell | 97-99 | 110 |
 
+Rows here are differences of pooled row means (`condition_mean - baseline_mean`
+in `exploitability.csv`); the headline table above quotes the per-photo
+`mean_gain` that its intervals bracket. They differ slightly (Qwen `noimg`
++0.219 vs +0.212; `enhance` -0.002 vs -0.012) and both are ~0 for the cosmetic
+axes.
+
 **The blind default is the one result the second judge can support.** Both judges
 answer a request with no image by falling back on a high default — `phi` ~19 and
 ~20 out of 25 — and both defaults survive selection by the *other* judge's
@@ -280,10 +459,10 @@ image-free prompts.
 
 ### What this run cannot say
 
-No noise floor of its own (greedy, n=1) and no damage reference (controls only,
-nothing corrupted). Both denominators come from the 2026-09-15 pilot, over
-different photographs. The nuisance axes — `shuffle`, `subset`, `box` — are not
-in this run at all and remain at pilot n.
+No damage reference (controls only, nothing corrupted). *(Updated 2026-10-14:
+the noise floor does exist in this run after all, 0.019 mean |delta| between
+identical requests, and the nuisance axes now have their own 150-photo run —
+both at the top of this file. `main` supplies the damage reference.)*
 
 ---
 
@@ -415,7 +594,8 @@ the split, but it is **not a per-judge number**. Qwen's own drift split is the
 one in [`../results/main_2026-09-18/`](../results/main_2026-09-18/); a per-judge
 split for InternVL has not been run.
 
-`noise_floor.csv` is empty for both judges: greedy decoding, as designed.
+`noise_floor.csv` is empty for both judges: it needs a sampled run. The greedy
+floor from identical requests exists anyway — see the top of this file.
 
 ---
 
@@ -469,7 +649,8 @@ defeated by the `max_pixels` cap.
 
 ### 1. The per-region score is no more likely to move on the damaged region
 
-Tie rate (`delta == 0` exactly, greedy so not sampling noise), floor-excluded,
+Tie rate (`delta == 0` exactly; greedy, but identical requests still differ
+~6-11% of the time on `reward` — see the top of this file), floor-excluded,
 `reward`:
 
 | corruption / severity | target unchanged | any-other unchanged |
@@ -562,16 +743,17 @@ conditions everything in this entry.
   fine-tuned SFReward, or the Gemini teacher, behaves this way — the fine-tuning
   exists precisely to shape this behaviour. This bounds the claim and must be
   loud.
-- ~~**One judge, one family** (Qwen3-VL-8B).~~ **Closed 2026-09-26**: InternVL3-2B,
-  a different family, fails the same way on the identical manifest — see the
-  second-judge entry at the top of this file. The remaining scale caveat is that
-  the family control is a 2B, because InternVL3-8B does not fit the A10.
+- **One judge for localization** (Qwen3-VL-8B). This was struck through on
+  2026-09-26 as closed by InternVL3-2B; **that was retracted 2026-09-29** —
+  InternVL fails the perception precondition, so its flat result cannot count.
+  See the second-judge entry above. The caveat stands.
 - **Natural region sizes only** (`area_bin: full`, mean 4.5% of image, the low end
   of the paper's 2-25% band). Whether large-region damage localises better is
   untested.
-- **Greedy decoding, so no within-run noise floor.** The finding rests on the tie
-  rate and the between-variant SD, both the right instruments here. The
-  `T=0.7 n=5` floor run over the identical variants is still to do.
+- **Greedy decoding.** *(Corrected 2026-10-14: there is a noise
+  floor — identical control requests in this run differ 8.5% of the time on `reward`, mean
+  |delta| 0.028, against 0.088 for real damage. See the top of this file.)* The
+  `T=0.7 n=5` sampled run is no longer needed for a denominator.
 - **`n = 150` photographs.** Regions within an image are not independent (that is
   the finding), so effective n is the photo count, not the 5,236 variants.
 - The `score_preserve` overediting question is now partly informed — the axis
@@ -612,8 +794,8 @@ see [`DECISIONS.md`](DECISIONS.md).
 ### The finding, three ways, all pointing the same direction
 
 1. **The score usually does not move.** 53-80% of DAMAGED regions receive a score
-   identical to their clean control. Deterministic decoding, so this is not
-   sampling noise.
+   identical to their clean control. *(Greedy, but not noise-free: identical
+   requests differ ~6-11% of the time on `reward` — corrected 2026-10-14.)*
 2. **When it moves, it is not the damaged region.** `target_unchanged` equals
    `other_unchanged` to three decimals in three of four cells (0.667/0.667,
    0.667/0.667, 0.533/0.533). The region we damaged is no more likely to change
@@ -713,9 +895,9 @@ re-run any of it.
 
 > **Superseded for the three exploit axes** by the 2026-09-29 run at 150 bases —
 > see the top of this file. Two of the three numbers below reversed. This section
-> remains the source for the **nuisance** axes (`shuffle`, `subset`, `box`), the
-> **noise floor** and the **damage reference**, none of which a controls-only
-> manifest can produce.
+> was the source for the nuisance axes until the 2026-10-14 run at 150 bases
+> superseded those too; the pilot's T=0.7 floor (0.114) is still the only
+> sampled-run measurement.
 
 `mcvgpu2025s-0043`, pilot profile: 5 bases, 16 regions, 80 variants,
 Qwen3-VL-8B, greedy, plus a `T=0.7 n=5` floor run over the same variants. Eight
@@ -802,11 +984,14 @@ improves no edit should, if that reading is right, raise every region's reward
 through `AES` alone.
 
 **It does not.** At 150 bases (2026-09-29) `enhance` moves mean `reward` by
--0.002 and `enhance_target` by +0.002, both far below the 0.114 noise floor. The
-factor is real and in the equation, but this judge does not reward a cosmetic
-lift enough to move `AES`, and on a failed edit it structurally cannot: `phi = 0`
-times any `AES` is still 0. Report the factor as an architectural property of
-Eq. (3), not as a demonstrated exploit.
+-0.002 and `enhance_target` by +0.002, both far below the noise floor (0.019 mean
+|delta| between identical requests in that same run). `AES` itself does move,
+but **down**: sharpening lowers Qwen's PQ by ~1.1 on both terms (see "The AES
+channel moves the wrong way" above). It barely reaches `reward` because `AES`
+enters under a square root and the ~42% of regions at `phi = 0` stay at 0
+whatever `AES` does. Report the factor as an architectural property of Eq. (3),
+not as a demonstrated exploit. *(Corrected 2026-10-14: this paragraph used to
+say the lift does not move `AES`, contradicting the direct PQ measurement.)*
 
 ---
 

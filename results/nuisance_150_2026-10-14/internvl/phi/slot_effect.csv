@@ -1,0 +1,6 @@
+judge,slot_idx,mean,std,size,within,within_lo,within_hi
+OpenGVLab/InternVL3-2B,0,9.821,11.937,476,0.298,0.061,0.556
+OpenGVLab/InternVL3-2B,1,9.0,11.774,476,-0.506,-0.78,-0.249
+OpenGVLab/InternVL3-2B,2,9.689,11.924,476,0.211,-0.11,0.529
+OpenGVLab/InternVL3-2B,3,6.63,10.719,92,-0.065,-0.409,0.213
+OpenGVLab/InternVL3-2B,4,4.75,9.244,20,0.25,0.0,0.75

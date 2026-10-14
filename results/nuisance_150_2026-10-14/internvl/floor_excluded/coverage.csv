@@ -1,0 +1,5 @@
+presentation,rows,parse_rate,scored,reward
+baseline,1540,1.0,1.0,1.0
+box,1540,1.0,1.0,1.0
+shuffle,1540,1.0,1.0,1.0
+subset,1064,1.0,1.0,1.0

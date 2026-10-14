@@ -241,7 +241,8 @@ Qwen3-VL-8B under `baseline`, `noimg`, `enhance`, `enhance_target`, 8,064 rows,
 ~100 photographs per exploit cell against the pilot's 4. **`noimg` is the one
 real exploit and it replicates**: mean `reward` +0.219 overall, **+0.591 on edits
 the judge had already called failed, 94% of those regions rising**, against a
-0.114 noise floor. Ok edits drift the other way (-0.107): with no image the judge
+noise floor of 0.019 (mean |delta| between identical requests in the same run).
+Ok edits drift the other way (-0.107): with no image the judge
 falls to a high default near `phi` 19. Describe `noimg` as a **constant**, not a
 gain: the slope of gain on baseline is -0.922 and `sd` falls 0.417 -> 0.173, so
 "+0.55 on failed edits" is arithmetic, not a second finding. Quote the default
@@ -294,6 +295,43 @@ Numbers and raw parquets in `results/exploit_150_2026-09-29/` (`qwen/`,
 `internvl/`, `agreement/`, plus `exploit_gain.png` per judge); full account in
 [`docs/FINDINGS.md`](../docs/FINDINGS.md).
 
+**Nuisance at 150 bases is DONE** (2026-10-14, `mcvgpu2025s-0004`, both judges):
+the 476 `nuisance150` controls under `shuffle`, `subset`, `box`, paired against
+the exploit run's `baseline`, with the damage reference (0.088 mean |delta| on
+the damaged region) taken from `main` via `nuisance_report --damage-scores`.
+**Reordering the region list moves the per-region score more than twice as much
+as damage**; quote floor-excluded (`--min-control 0`, as for `main`), ratio of
+per-photo means with a paired photo bootstrap: `shuffle` 2.20x [1.72, 2.82]
+`reward` / 2.62x `phi`; `subset` 1.34x [0.99, 1.75] / 1.67x; `box` 1.12x [0.82,
+1.49] / 1.07x — so `subset` and `box` are "about as much as damage", not more.
+An all-region first pass (2.26/1.57/1.59x, "every lower bound clears damage")
+was corrected the same day: floored regions can rise under packaging but not
+fall under damage, which tilts that cut. The 58 identity shuffles (requests
+byte-identical to baseline) move at the floor, so it is the reordering. **No
+list-position effect within a photo** for Qwen; the pilot's slot-3 dip was a
+confound (slots 3-4 exist only on 4-5 region photos).
+**InternVL3-2B ran the same axes** (21:44-22:29, `--gpu-util 0.60`): read
+against its own noise only (its damage is ~2x its floor, so its damage ratio
+must not be quoted). Reordered 0.190 vs the in-run identity null 0.092 (all
+regions) / 0.259 vs 0.050 (floor-excluded), so **"reordering moves the
+per-region score" is cross-family**, needing no perception. `subset` clears the
+null only floor-excluded; `box` does not clearly clear it. InternVL's noise is
+context-dependent (identity shuffles 0.092 vs 0.024 within a run, foreground), so for it
+compare against `identity_null.csv`, not `vs_floor`; it also has a small
+position effect (slot 1 -0.5 `phi`). Not tested: damaged variants under each
+axis, mask/crop formats (never built). Results in
+`results/nuisance_150_2026-10-14/` (InternVL under `internvl/`).
+
+**Greedy is not deterministic** (found 2026-10-14). Under `baseline` a photo's
+3-5 clean controls are the same request (target-independent prompt, `none`
+copies the edit), and greedy vLLM answers them differently ~6-11% of the time on `reward`:
+`reward` mean |delta| 0.019 within one engine run (`0004`), 0.017-0.027 across
+runs on one VM, 0.027 across VMs (unchanged 92.5% / 91-94% / 88.8%). Note `main`'s
+5 shards are 5 runs, so most of its control pairs are cross-run. **That is the
+noise floor** (`rerun_floor()` in `nuisance_report.py`); it replaces "greedy has
+no within-run floor". Real damage is 2.6-4.6x it, so the main finding stands, and
+run-to-run pairing is legitimate.
+
 Downloaded, unpacked and built into a pilot manifest on `mcvgpu2025s-0043`
 (2026-09-15): `bases.json` holds 150 bases, pilot takes 5 with 16 regions -> 80
 variants, all 80 rendered by stage 2 and built into requests by `--dry-run`.
@@ -311,21 +349,7 @@ All five test suites pass on the laptop. Cross-VM determinism is confirmed on
 
 **Outstanding (none blocks the write-up):**
 
-- The `T=0.7 n=5` noise-floor run over the identical `main` variants. Greedy gave
-  no within-run floor; the tie rate and between-variant SD carry the finding, but
-  the floor is worth having for the report.
 - Determinism hash from the last VM. Still the only unreported verification.
-- **The nuisance axes are still at pilot n.** `shuffle`, `subset` and `box` ran
-  only on the 2026-09-15 pilot's 5 photos, where `shuffle` moved `reward` 1.55x
-  what real damage does. The 2026-09-29 rerun was controls-only, so it could not
-  carry them — a nuisance delta needs corrupted variants for its denominator.
-  Raising them to 150 bases means a manifest with corruptions, roughly 4x the
-  cost of the exploit run.
-- The `T=0.7 n=5` noise floor is the only denominator this run lacks: the
-  0.114 it is compared against comes from the 2026-09-15 pilot, over different
-  photographs. A better within-run floor already exists and is unused --
-  `enhance_target` minus `enhance` (two near-identical stimuli, same images)
-  moves `reward` by 0.09.
 - **A second judge family that passes the perception control.** InternVL3-2B
   does not (see above), so the cross-family localization claim is retracted and
   this is back to being the top strengthening job. Run `scripts/pq_response.py`
@@ -351,13 +375,17 @@ paragraph above and [`docs/FINDINGS.md`](../docs/FINDINGS.md).
    8 conditions including `enhance_target`.
 4. ~~Exploitability at reportable n.~~ **Done 2026-09-29** on `0004`, 150 bases,
    Qwen3-VL-8B. Results in `results/exploit_150_2026-09-29/`.
+4b. ~~Nuisance axes at 150 bases.~~ **Done 2026-10-14** on `0004`, Qwen,
+   controls only; InternVL3-2B the same evening. Results in
+   `results/nuisance_150_2026-10-14/`.
 5. **Figures and the report.** The tie-rate and coherence tables are the
    headline, not AUROC. This is the critical path now.
 6. Cross-VM determinism hash from the one VM that has not reported it.
-7. Optional: the `T=0.7 n=5` noise-floor run, a large-region check
-   (`area_bin: half`, since `main` used only `full` at mean 4.5% area), and the
-   nuisance axes at 150 bases. Full rationale for all of these is in
-   `docs/internal/TEAM_BRIEF.md` "Recommended strengthening".
+7. Optional: an object-size split of `main` by `area_frac` (laptop only; the
+   value is in `bases.json`). Note `area_bin: half/quarter` does NOT test bigger
+   regions — it shrinks the damaged footprint inside the region, a weaker
+   stimulus. Full rationale in `docs/internal/TEAM_BRIEF.md` "Recommended
+   strengthening".
 
 ## Do not re-litigate
 
@@ -373,8 +401,11 @@ Each was measured, not argued. The evidence is in
   regions.
 - **A 4B judge does not fix throughput.** 26x concurrency bought 2%.
 - **Greedy in both `stage3_judge` and `run_shard.sh`**, passed explicitly, with
-  no env-var override on purpose. The noise floor is a separate
-  `--temperature 0.7 --n-samples 5` run over the identical variants.
+  no env-var override on purpose. Greedy is not bit-deterministic; its floor
+  comes from identical baseline requests (`rerun_floor`), so no sampled run is
+  needed for a denominator.
+- **Nuisance needs only clean controls.** The damage denominator comes from
+  `main` (`--damage-scores`); a corrupted nuisance manifest is not required.
 - **`remove` is reported as one binary condition**, not a severity ladder — its
   s1 and s3 differ by 0.5 of 35 levels because inpainting deletes the object at
   every radius. `FLAT_SEVERITY` handles it so no caller can forget.

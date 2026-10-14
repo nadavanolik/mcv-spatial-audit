@@ -524,6 +524,64 @@ def test_boot_ci_resamples_photographs_not_regions():
     assert np.isnan(boot_ci(one.gain, one.base)[0]), "one photo is not a sample"
 
 
+def test_rerun_floor_pairs_identical_controls_only():
+    """The floor compares a base's clean controls with EACH OTHER, per region.
+
+    Three controls of one base are one request sent three times; their scores
+    [0.5, 0.5, 0.7] give pairs 0, 0.2, 0.2. A corrupted row, a non-baseline
+    row, or a different region must not enter a pair -- each would turn real
+    damage or a presentation effect into 'noise'."""
+    import pandas as pd
+    from scripts.nuisance_report import rerun_floor
+
+    row = dict(judge="j", base_id="b0", scored_region_id="0",
+               presentation="baseline", is_control=True)
+    df = pd.DataFrame([{**row, "reward": v} for v in (0.5, 0.5, 0.7)] + [
+        {**row, "reward": 0.0, "is_control": False},       # damaged
+        {**row, "reward": 0.0, "presentation": "shuffle"},  # other condition
+        {**row, "reward": 0.9, "scored_region_id": "1"},    # lone region
+    ])
+    mean, ties, n = rerun_floor(df, "reward")
+    assert n == 3, f"expected 3 pairs, got {n}"
+    assert abs(mean - 0.4 / 3) < 1e-9 and abs(ties - 1 / 3) < 1e-9
+
+
+def test_identity_null_splits_on_slot_order():
+    """A shuffle that kept every region at its baseline slot is 'identity';
+    one that moved any region is 'reordered'. Background never counts."""
+    import pandas as pd
+    from scripts.nuisance_report import identity_null
+
+    def row(v, pres, rid, slot, r):
+        return dict(judge="j", variant_id=v, base_id="b" + v, presentation=pres,
+                    scored_region_id=rid, slot_idx=slot, reward=r)
+    df = pd.DataFrame([
+        row("A", "baseline", "0", 0, 0.5), row("A", "baseline", "1", 1, 0.5),
+        row("A", "shuffle", "0", 0, 0.5), row("A", "shuffle", "1", 1, 0.7),
+        row("B", "baseline", "0", 0, 0.5), row("B", "baseline", "1", 1, 0.5),
+        row("B", "shuffle", "0", 1, 0.0), row("B", "shuffle", "1", 0, 0.5),
+        row("B", "baseline", "bg", -1, 0.9), row("B", "shuffle", "bg", -1, 0.0),
+    ])
+    t = identity_null(df, "reward").set_index("order")
+    assert t.loc["identity", "n"] == 2 and t.loc["reordered", "n"] == 2, t
+    assert abs(t.loc["identity", "mean_abs_delta"] - 0.1) < 1e-9
+    assert abs(t.loc["reordered", "mean_abs_delta"] - 0.25) < 1e-9
+
+
+def test_ratio_ci_is_a_ratio_of_photo_means():
+    """Numerator exactly twice the denominator in every photo gives ratio 2
+    with a zero-width CI, however many rows each photo has; a photo present
+    on only one side is ignored, not counted as a zero."""
+    import pandas as pd
+    from scripts.nuisance_report import ratio_ci
+
+    den = pd.DataFrame(dict(v=[0.1, 0.2, 0.3], b=["p0", "p1", "p2"]))
+    num = pd.DataFrame(dict(v=[0.2, 0.2, 0.4, 0.6, 9.9],
+                            b=["p0", "p0", "p1", "p2", "only_num"]))
+    r, lo, hi = ratio_ci(num.v, num.b, den.v, den.b)
+    assert abs(r - 2) < 1e-9 and abs(lo - 2) < 1e-9 and abs(hi - 2) < 1e-9,         (r, lo, hi)
+
+
 def test_report_writes_the_exploit_figure():
     """The figure must actually land on disk.
 
@@ -594,6 +652,9 @@ TESTS = [test_shuffle_is_a_permutation, test_shuffle_is_deterministic,
          test_report_splits_a_local_flatterer_on_failed_edits,
          test_reversion_unmasks_a_constant_judge,
          test_boot_ci_resamples_photographs_not_regions,
+         test_rerun_floor_pairs_identical_controls_only,
+         test_ratio_ci_is_a_ratio_of_photo_means,
+         test_identity_null_splits_on_slot_order,
          test_report_writes_the_exploit_figure,
          test_agreement_scores_a_cloned_judge_as_perfect]
 

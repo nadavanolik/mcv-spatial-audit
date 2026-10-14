@@ -36,7 +36,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.presentation import (EXPLOIT_AXES, NUISANCE_AXES,      # noqa: E402
                               TEXT_AXES)
 from src.stage4_analyze import (READOUTS, BG, delta_table,      # noqa: E402
-                                load, noise_floor, sensitivity, usable)
+                                drop_floored, load, noise_floor,
+                                sensitivity, usable)
 
 BASE = "baseline"
 
@@ -54,33 +55,93 @@ def paired(df: pd.DataFrame, col: str) -> pd.DataFrame:
                          columns="presentation", values=col)
 
 
-def damage_reference(df: pd.DataFrame, col: str) -> tuple:
+def damage_reference(df: pd.DataFrame, col: str,
+                     min_control: float = None) -> tuple:
     """What REAL damage does, from the baseline condition alone.
 
     The pilot design is [none, blur, remove], so the baseline parquet already
     holds clean controls and damaged variants -- the sweep is self-contained
-    and needs nothing from the main run.
+    and needs nothing from the main run. A controls-only sweep takes it from
+    the main run instead (--damage-scores).
+
+    `min_control` drops regions whose clean control already sits at or below
+    it, as stage 4's --min-control does: a region at 0 cannot drop, so it
+    dilutes the damage effect with guaranteed ties.
     """
     b = df[df.presentation == BASE]
     if b.empty:
-        return float("nan"), float("nan"), pd.DataFrame()
+        return float("nan"), float("nan"), pd.DataFrame(), pd.DataFrame()
     d = delta_table(usable(b, col), col)
+    if min_control is not None:
+        d = drop_floored(d, min_control)
     if d.empty:
-        return float("nan"), float("nan"), pd.DataFrame()
+        return float("nan"), float("nan"), pd.DataFrame(), pd.DataFrame()
     tgt = d[(d.is_target) & (d.scored_region_id != BG)]
     return (float(tgt.delta.abs().mean()) if len(tgt) else float("nan"),
             float((tgt.delta == 0).mean()) if len(tgt) else float("nan"),
-            sensitivity(d))
+            sensitivity(d),
+            pd.DataFrame({"abs": tgt.delta.abs().values,
+                          "base": tgt.base_id.values}))
 
 
-def nuisance_table(w: pd.DataFrame, damage: float, floor: float) -> pd.DataFrame:
-    """|delta| for each null change, against what real damage moved."""
+def rerun_floor(df: pd.DataFrame, col: str) -> tuple:
+    """What the judge does to a BYTE-IDENTICAL request: the greedy noise floor.
+
+    Under `baseline` a clean control's request does not depend on its target
+    (corruption `none` copies the edit; the prompt lists every region in
+    canonical order), so a base's 3-5 controls are the same request sent 3-5
+    times in one run. Greedy vLLM still disagrees with itself on them -- batch
+    composition flips argmax ties -- so |delta| between them is the floor, in
+    the same units as every nuisance |delta|. Returns (mean |delta|, share
+    unchanged, n pairs).
+    """
+    b = df[(df.presentation == BASE) & df.is_control]
+    d = []
+    for _, g in b.groupby(["judge", "base_id", "scored_region_id"]):
+        v = g[col].to_numpy()
+        d += [abs(x - y) for i, x in enumerate(v) for y in v[i + 1:]]
+    if not d:
+        return float("nan"), float("nan"), 0
+    d = np.asarray(d)
+    return float(d.mean()), float((d == 0).mean()), len(d)
+
+
+def nuisance_table(w: pd.DataFrame, damage: float, floor: float,
+                   base_of: pd.Series = None,
+                   min_control: float = None,
+                   dmg: pd.DataFrame = None) -> pd.DataFrame:
+    """|delta| for each null change, against what real damage moved.
+
+    With `base_of` (variant_id -> base_id) it adds the per-photograph mean of
+    |delta| and its bootstrap CI over photographs, the same estimator pair as
+    every exploit interval.
+
+    By default every scored slot counts, background included (the pilot's
+    convention). `min_control` restricts to the population the floor-excluded
+    damage reference uses: foreground regions whose baseline score is above it.
+
+    With `dmg` (per damaged region: |delta| and base) it adds `ratio`, the
+    per-photograph mean |delta| over the per-photograph damage mean, with a CI
+    from `ratio_ci` -- the number the "N x damage" claim actually rests on."""
+    if min_control is not None:
+        w = w[(w.index.get_level_values("scored_region_id") != BG)
+              & (w[BASE] > min_control)]
     rows = []
     for mode in [c for c in w.columns if c in NUISANCE_AXES]:
         p = w[[BASE, mode]].dropna()
         if p.empty:
             continue
         d = p[mode] - p[BASE]
+        ci = {}
+        if base_of is not None:
+            base = pd.Series(p.index.get_level_values("variant_id"),
+                             index=d.index).map(base_of)
+            lo, hi = boot_ci(d.abs(), base)
+            ci = dict(photo_mean_abs=cluster_mean(d.abs(), base),
+                      photo_lo=lo, photo_hi=hi, n_bases=int(base.nunique()))
+            if dmg is not None and len(dmg):
+                r, rlo, rhi = ratio_ci(d.abs(), base, dmg["abs"], dmg["base"])
+                ci.update(ratio=r, ratio_lo=rlo, ratio_hi=rhi)
         rows.append(dict(
             presentation=mode,
             kind="text" if mode in TEXT_AXES else "image",
@@ -90,6 +151,7 @@ def nuisance_table(w: pd.DataFrame, damage: float, floor: float) -> pd.DataFrame
             mean_delta=float(d.mean()),
             vs_damage=float(d.abs().mean() / damage) if damage else float("nan"),
             vs_floor=float(d.abs().mean() / floor) if floor else float("nan"),
+            **ci,
         ))
     return pd.DataFrame(rows)
 
@@ -102,13 +164,64 @@ def slot_effect(df: pd.DataFrame, col: str, mode: str = "shuffle") -> pd.DataFra
     reward in name only. Meaningful only for shuffle, where position varies
     independently of region id; under every other condition the two are the
     same column.
+
+    The raw per-slot mean is confounded: slots 3-4 exist only on 4-5 region
+    photographs. `within` removes that -- each (photo, region) is shown at
+    different slots across the photo's controls, so subtracting the region's own
+    mean over its slots leaves position alone. Its CI resamples photographs.
     """
     d = df[(df.presentation == mode) & (df.scored_region_id != BG)]
-    d = d[d.slot_idx >= 0]
+    d = d[d.slot_idx >= 0].copy()
     if d.empty:
         return pd.DataFrame()
-    return (d.groupby(["judge", "slot_idx"])[col]
-            .agg(["mean", "std", "size"]).round(3).reset_index())
+    d["within"] = d[col] - d.groupby(["judge", "base_id", "scored_region_id"]
+                                     )[col].transform("mean")
+    rows = []
+    for (judge, slot), g in d.groupby(["judge", "slot_idx"]):
+        lo, hi = boot_ci(g.within, g.base_id)
+        rows.append(dict(judge=judge, slot_idx=slot, mean=g[col].mean(),
+                         std=g[col].std(), size=len(g),
+                         within=cluster_mean(g.within, g.base_id),
+                         within_lo=lo, within_hi=hi))
+    return pd.DataFrame(rows).round(3)
+
+
+def identity_null(df: pd.DataFrame, col: str, mode: str = "shuffle",
+                  min_control: float = None) -> pd.DataFrame:
+    """Shuffles that drew the identity permutation: a null inside the run.
+
+    ~1/n! of `shuffle` variants keep the canonical order, so their requests are
+    byte-identical to `baseline` -- yet they were judged in the shuffle run,
+    beside reordered neighbours. Their |delta| against baseline is therefore the
+    run-to-run noise in exactly the pairing the nuisance deltas use, and the
+    reordered variants are measured against it. Identity is read off the data:
+    every region sits at the same slot as under baseline. Background excluded.
+    The identity group is ~3-region photos (1/6 vs 1/24), so it is not a random
+    subset; treat it as a check, not a matched control.
+    """
+    k = ["judge", "variant_id", "scored_region_id"]
+    fg = df[df.scored_region_id != BG]
+    s = fg[fg.presentation == mode][k + ["base_id", "slot_idx", col]]
+    b = fg[fg.presentation == BASE][k + ["slot_idx", col]]
+    m = s.merge(b, on=k, suffixes=("", "_b")).dropna(subset=[col, col + "_b"])
+    if min_control is not None:
+        m = m[m[col + "_b"] > min_control]
+    if m.empty:
+        return pd.DataFrame()
+    same = (m.slot_idx == m.slot_idx_b).groupby([m.judge, m.variant_id]).all()
+    m["identity"] = [same[(j, v)] for j, v in zip(m.judge, m.variant_id)]
+    m["absd"] = (m[col] - m[col + "_b"]).abs()
+    rows = []
+    for (judge, ident), g in m.groupby(["judge", "identity"]):
+        lo, hi = boot_ci(g.absd, g.base_id)
+        rows.append(dict(judge=judge, order="identity" if ident else "reordered",
+                         n_variants=g.variant_id.nunique(), n=len(g),
+                         n_bases=g.base_id.nunique(),
+                         mean_abs_delta=g.absd.mean(),
+                         photo_mean_abs=cluster_mean(g.absd, g.base_id),
+                         photo_lo=lo, photo_hi=hi,
+                         unchanged=float((g.absd == 0).mean())))
+    return pd.DataFrame(rows)
 
 
 def cluster_mean(gain: pd.Series, base_id: pd.Series) -> float:
@@ -152,6 +265,25 @@ def boot_ci(gain: pd.Series, base_id: pd.Series, n_boot: int = 2000,
     idx = rng.integers(0, len(per_base), size=(n_boot, len(per_base)))
     means = per_base.values[idx].mean(axis=1)
     return float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))
+
+
+def ratio_ci(num: pd.Series, num_base: pd.Series, den: pd.Series,
+             den_base: pd.Series, n_boot: int = 2000, seed: int = 0) -> tuple:
+    """Ratio of two per-photograph means, with a 95% CI that resamples the
+    photographs both sides share -- numerator and denominator move together,
+    so the denominator's own uncertainty is in the interval."""
+    a = pd.DataFrame({"v": num.values, "b": num_base.values}).dropna()
+    c = pd.DataFrame({"v": den.values, "b": den_base.values}).dropna()
+    a, c = a.groupby("b").v.mean(), c.groupby("b").v.mean()
+    shared = a.index.intersection(c.index)
+    if len(shared) < 2:
+        return float("nan"), float("nan"), float("nan")
+    a, c = a[shared].values, c[shared].values
+    idx = np.random.default_rng(seed).integers(0, len(shared),
+                                               size=(n_boot, len(shared)))
+    r = a[idx].mean(axis=1) / c[idx].mean(axis=1)
+    return (float(a.mean() / c.mean()), float(np.percentile(r, 2.5)),
+            float(np.percentile(r, 97.5)))
 
 
 def reversion(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
@@ -427,8 +559,18 @@ def main() -> int:
     # detection logic to get wrong.
     ap.add_argument("--sampled", default="out/nuisance/floor_*.parquet",
                     help="the n>1 baseline run that supplies the noise floor. "
-                         "Greedy decoding has no within-variant spread, so "
-                         "without this there is no denominator.")
+                         "Without it the floor comes from identical greedy "
+                         "baseline requests instead.")
+    ap.add_argument("--damage-scores", default=None,
+                    help="greedy baseline parquets that hold corrupted variants, "
+                         "for the damage reference. Needed when --scores is a "
+                         "controls-only sweep (nuisance150); point it at the "
+                         "main run, which judged the same controls.")
+    ap.add_argument("--min-control", type=float, default=None,
+                    help="drop regions whose clean score is at or below this, "
+                         "in the damage reference and the nuisance table alike "
+                         "(background excluded too). 0 matches the main run's "
+                         "floor-excluded headline.")
     ap.add_argument("--out", default="out/analysis/nuisance")
     ap.add_argument("--col", default="reward", choices=READOUTS,
                     help="headline readout for the nuisance table "
@@ -471,8 +613,9 @@ def main() -> int:
         print(f"  + {len(sampled)} rows from the sampled floor run "
               f"({int(sampled.sample_idx.max()) + 1} samples/request)")
 
-    # The denominator. Greedy runs have no within-variant spread by
-    # construction, so the floor has to come from the sampled run or not at all.
+    # The denominator. A sampled run gives it directly; without one, fall back
+    # on identical baseline requests, which greedy vLLM does not score
+    # identically (see rerun_floor).
     floor = float("nan")
     if len(sampled):
         nf = noise_floor(usable(sampled, a.col), a.col)
@@ -482,13 +625,15 @@ def main() -> int:
             print(nf.to_string(index=False))
             nf.to_csv(out / "noise_floor.csv", index=False)
     if floor != floor:
-        print("\n=== noise floor: NOT MEASURED ===")
-        print("  No sampled run in this glob. Every ratio below is against")
-        print("  real damage only, and a nuisance effect cannot be told from")
-        print("  judge instability. Run the baseline condition once more at")
-        print("  --temperature 0.7 --n-samples 5 over the SAME variants.")
+        floor, rerun_ties, n_pairs = rerun_floor(usable(greedy, a.col), a.col)
+        print(f"\n=== noise floor, {a.col} (identical baseline requests) ===")
+        print(f"  {n_pairs} pairs of byte-identical requests in one greedy run")
+        print(f"  mean |delta| {floor:.4f}, unchanged {rerun_ties:.1%}")
+        print("  vs_floor below is against this mean |delta|.")
 
-    damage, damage_ties, sens = damage_reference(greedy, a.col)
+    damage_src = load(a.damage_scores) if a.damage_scores else greedy
+    damage, damage_ties, sens, dmg = damage_reference(damage_src, a.col,
+                                                      a.min_control)
     print(f"\n=== reference: what REAL damage does ({a.col}) ===")
     if len(sens):
         print(sens.round(3).to_string(index=False))
@@ -502,7 +647,9 @@ def main() -> int:
     print(f"\n=== NUISANCE: does a null change move the score ({a.col})? ===")
     print("  vs_damage: 1.0 means a nuisance change moves the score as much as")
     print("  real damage to the region does. text axes change NO pixels.")
-    nt = nuisance_table(w, damage, floor)
+    nt = nuisance_table(w, damage, floor,
+                        greedy.drop_duplicates("variant_id")
+                        .set_index("variant_id").base_id, a.min_control, dmg)
     if len(nt):
         print(nt.round(4).to_string(index=False))
         nt.to_csv(out / "nuisance.csv", index=False)
@@ -515,6 +662,13 @@ def main() -> int:
             print("  the packaging, not the region.")
     else:
         print("  n/a -- only the baseline condition is present")
+
+    inull = identity_null(greedy, a.col, min_control=a.min_control)
+    if len(inull):
+        print(f"\n=== identity shuffles: the null inside the shuffle run ({a.col}) ===")
+        print("  identity = canonical order kept, request byte-identical to baseline.")
+        print(inull.round(4).to_string(index=False))
+        inull.to_csv(out / "identity_null.csv", index=False)
 
     se = slot_effect(greedy, a.col)
     if len(se):

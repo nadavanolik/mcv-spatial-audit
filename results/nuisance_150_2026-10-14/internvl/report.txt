@@ -1,0 +1,105 @@
+loaded 7588 rows from 4 shards, judges=['OpenGVLab/InternVL3-2B']
+parse rate: 100.0%
+
+=== conditions ===
+presentation  rows  parse_rate  scored  reward
+    baseline  1540         1.0     1.0     1.0
+         box  1540         1.0     1.0     1.0
+     shuffle  1540         1.0     1.0     1.0
+      subset  1064         1.0     1.0     1.0
+
+=== noise floor, reward (identical baseline requests) ===
+  2316 pairs of byte-identical requests in one greedy run
+  mean |delta| 0.0207, unchanged 89.5%
+  vs_floor below is against this mean |delta|.
+loaded 22176 rows from 5 shards, judges=['OpenGVLab/InternVL3-2B']
+parse rate: 100.0%
+
+=== reference: what REAL damage does (reward) ===
+                 judge corruption severity  n_target  target_unchanged  target_dropped  target_rose  other_unchanged
+OpenGVLab/InternVL3-2B       blur        1       476             0.803           0.113        0.084            0.805
+OpenGVLab/InternVL3-2B       blur        3       476             0.786           0.145        0.069            0.785
+OpenGVLab/InternVL3-2B       jpeg        1       476             0.805           0.105        0.090            0.812
+OpenGVLab/InternVL3-2B       jpeg        3       476             0.773           0.141        0.086            0.775
+OpenGVLab/InternVL3-2B      noise        1       476             0.811           0.113        0.076            0.815
+OpenGVLab/InternVL3-2B      noise        3       476             0.798           0.143        0.059            0.795
+OpenGVLab/InternVL3-2B     remove   binary       952             0.773           0.155        0.071            0.768
+OpenGVLab/InternVL3-2B   saturate        1       476             0.813           0.124        0.063            0.820
+OpenGVLab/InternVL3-2B   saturate        3       476             0.800           0.113        0.086            0.806
+  mean |delta| on the DAMAGED region: 0.0408
+  share of damaged regions that did not move at all: 79.3%
+
+=== NUISANCE: does a null change move the score (reward)? ===
+  vs_damage: 1.0 means a nuisance change moves the score as much as
+  real damage to the region does. text axes change NO pixels.
+presentation  kind    n  unchanged  mean_abs_delta  mean_delta  vs_damage  vs_floor  photo_mean_abs  photo_lo  photo_hi  n_bases  ratio  ratio_lo  ratio_hi
+         box image 2016     0.7123          0.0718      0.0360     1.7578    3.4748          0.0769    0.0575    0.0956      150 1.8469    1.3400    2.5469
+     shuffle  text 2016     0.6741          0.1324      0.0111     3.2424    6.4094          0.1363    0.1173    0.1546      150 3.2714    2.5383    4.3666
+      subset  text 1540     0.7818          0.0749     -0.0315     1.8348    3.6269          0.0784    0.0619    0.0951      150 1.8828    1.4640    2.5258
+
+  shuffle: a change that touches no pixel moves reward by 0.1324,
+  3.24x what damaging the region does. The score is responding to
+  the packaging, not the region.
+
+  subset: a change that touches no pixel moves reward by 0.0749,
+  1.83x what damaging the region does. The score is responding to
+  the packaging, not the region.
+
+=== identity shuffles: the null inside the shuffle run (reward) ===
+  identity = canonical order kept, request byte-identical to baseline.
+                 judge     order  n_variants    n  n_bases  mean_abs_delta  photo_mean_abs  photo_lo  photo_hi  unchanged
+OpenGVLab/InternVL3-2B reordered         418 1363      150          0.1802          0.1902    0.1636    0.2166     0.6053
+OpenGVLab/InternVL3-2B  identity          58  177       54          0.0931          0.0922    0.0452    0.1432     0.7458
+
+=== does the score follow LIST POSITION? (shuffle, reward) ===
+  Region ids are shuffled per variant, so slot and region id are
+  decorrelated. A trend across slots is position, not content.
+                 judge  slot_idx  mean   std  size  within  within_lo  within_hi
+OpenGVLab/InternVL3-2B         0 0.215 0.257   476   0.007      0.002      0.012
+OpenGVLab/InternVL3-2B         1 0.197 0.253   476  -0.011     -0.017     -0.006
+OpenGVLab/InternVL3-2B         2 0.212 0.256   476   0.004     -0.002      0.011
+OpenGVLab/InternVL3-2B         3 0.147 0.233    92  -0.001     -0.009      0.005
+OpenGVLab/InternVL3-2B         4 0.115 0.210    20   0.005     -0.000      0.016
+
+=== EXPLOITABILITY: can the score be pushed UP for free? ===
+  enhance is a global cosmetic lift; no edit is improved by it.
+  enhance_target is the same lift inside the target region's box only.
+  reward carries AES = min(PQ), an image-level factor; phi does not.
+  n/a -- no exploitability condition in this glob
+
+=== EXPLOIT on clean edits: failed vs ok, target vs other ===
+  failed = baseline sc_success below 20. n_bases is the
+  effective sample; regions within one photo are not independent.
+  [sc_success] using 5684/7588 rows (1904 missing this readout)
+  n/a -- needs a baseline with sc_success and an exploit condition
+
+=== is the split just reversion to the mean? ===
+  Splitting on the judge's OWN baseline and measuring change from
+  that same baseline is circular. slope -1 = the condition replaces
+  the score with a constant. If resid_* collapse to ~0, the split
+  carried nothing the slope did not.
+  [sc_success] using 5684/7588 rows (1904 missing this readout)
+
+=== local flattery: target minus other, paired within variant ===
+  enhance is the NEGATIVE CONTROL -- it lifts the whole frame, so it
+  cannot flatter one region. Its contrast is the floor; anything
+  enhance_target does not clear is not local flattery.
+
+=== multiplicity: ~0 intervals in this run, uncorrected ===
+  At 95% and this family size, roughly one null cell is expected to
+  exclude zero by chance. Treat a single exclusion as exploratory;
+  the claims worth making are the ones that survive a non-circular
+  split and are large against the reversion slope.
+
+=== the AES channel: what each condition does to image-level PQ ===
+  AES = min(PQ), so the LOWER of the two rows sets the reward.
+  A lift that raises one and lowers the other has not helped.
+       readout presentation   n  baseline_mean  condition_mean  mean_gain  frac_rose  frac_fell
+pq_naturalness          box 476         16.128          15.279     -0.849      0.071      0.134
+pq_naturalness      shuffle 476         16.128          16.021     -0.107      0.040      0.071
+pq_naturalness       subset 476         16.128          16.090     -0.038      0.038      0.059
+  pq_artifacts          box 476          8.153           8.819      0.666      0.170      0.113
+  pq_artifacts      shuffle 476          8.153           8.223      0.069      0.095      0.065
+  pq_artifacts       subset 476          8.153           8.212      0.059      0.078      0.053
+
+wrote results\nuisance_150_2026-10-14\internvl
