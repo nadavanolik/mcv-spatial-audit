@@ -316,6 +316,91 @@ def test_build_requests_under_every_presentation():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _listed_boxes(msg) -> list:
+    text = [c for c in msg[0]["content"] if c["type"] == "text"][0]["text"]
+    tail = text[text.index("Editing regions:") + len("Editing regions:"):]
+    return [d["bbox_2d"] for d in json.loads(tail)]
+
+
+def test_bbox_frame_pixel_is_unchanged_and_norm1000_scales():
+    """--bbox-frame: the default must reproduce the committed prompt exactly,
+    and norm1000 must divide by the image size, not by anything else."""
+    from src.judge_prompt import bbox_in_frame, build_sc_prompt, xywh_to_xyxy
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        bases = build_fixture(tmp, n_bases=1)
+        df = fixture_manifest(bases).head(1)
+        variants = tmp / "variants"
+        render_variants(bases, df, variants)
+
+        px, _ = build_requests(df, bases, variants, "baseline")
+        px2, _ = build_requests(df, bases, variants, "baseline", "pixel")
+        nm, _ = build_requests(df, bases, variants, "baseline", "norm1000")
+        assert _listed_boxes(px[0]) == [xywh_to_xyxy(r["bbox"]) for r in REGIONS]
+        assert px[0][0]["content"][-1]["text"] == px2[0][0]["content"][-1]["text"]
+        assert build_sc_prompt("i", REGIONS) == build_sc_prompt("i", REGIONS, "pixel")
+
+        w, h = Image.open(bases / df.iloc[0].base_id / "source.png").size
+        want = [[round(x / w * 1000), round(y / h * 1000),
+                 round((x + bw) / w * 1000), round((y + bh) / h * 1000)]
+                for x, y, bw, bh in (r["bbox"] for r in REGIONS)]
+        assert _listed_boxes(nm[0]) == want, (_listed_boxes(nm[0]), want)
+        assert _listed_boxes(nm[0]) != _listed_boxes(px[0])
+        # Only the SC text changes: images and the PQ request are identical.
+        for i in (0, 1):
+            a = [c["image_pil"].tobytes() for c in px[i][0]["content"]
+                 if c["type"] == "image_pil"]
+            b = [c["image_pil"].tobytes() for c in nm[i][0]["content"]
+                 if c["type"] == "image_pil"]
+            assert a == b
+        assert px[1][0]["content"][-1]["text"] == nm[1][0]["content"][-1]["text"]
+
+        # A full-image box maps to the frame's corners, on a non-square image.
+        assert bbox_in_frame([0, 0, 640, 480], "norm1000", (640, 480)) == [0, 0, 1000, 1000]
+        assert bbox_in_frame([320, 120, 160, 240], "norm1000", (640, 480)) == [500, 250, 750, 750]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_region_overlap_measures_damage_in_other_boxes():
+    """scripts/region_overlap.py on hand-made bytes: damage confined to A,
+    a box B that half-covers A, and a box C far away."""
+    import cv2
+    import pandas as pd
+    from scripts.region_overlap import box_geometry, measure
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        bases, variants = tmp / "bases", tmp / "variants"
+        (bases / "b0").mkdir(parents=True)
+        variants.mkdir()
+        regions = [{"region_id": 0, "label": "a", "bbox": [20, 20, 40, 40]},
+                   {"region_id": 1, "label": "b", "bbox": [40, 20, 40, 40]},
+                   {"region_id": 2, "label": "c", "bbox": [150, 150, 30, 30]}]
+        (bases / "b0" / "regions.json").write_text(json.dumps(regions))
+        edit = np.full((200, 200, 3), 100, np.uint8)
+        cv2.imwrite(str(bases / "b0" / "edit.png"), edit)
+        var = edit.copy()
+        var[20:60, 20:60] = 200                     # all of A's box, visibly
+        var[100, 100] = 103                         # below the visibility cut
+        cv2.imwrite(str(variants / "v0.png"), var)
+        man = pd.DataFrame([dict(variant_id="v0", base_id="b0", target_region_id=0,
+                                 corruption="blur", severity=3, is_control=False),
+                            dict(variant_id="c0", base_id="b0", target_region_id=0,
+                                 corruption="none", severity=0, is_control=True)])
+        ov, missing = measure(man, bases, variants)
+        assert missing == 0
+        ov = ov.set_index("other_region_id")
+        assert sorted(ov.index) == ["1", "2"], "target or control rows leaked in"
+        assert abs(ov.loc["1", "other_box_damaged"] - 0.5) < 1e-9, ov
+        assert abs(ov.loc["1", "damage_share_in_box"] - 0.5) < 1e-9, ov
+        assert ov.loc["2", "other_box_damaged"] == 0.0
+        assert ov.loc["1", "damage_px"] == 1600
+        iou, contain = box_geometry(regions[0]["bbox"], regions[1]["bbox"])
+        assert abs(contain - 0.5) < 1e-9 and abs(iou - 1 / 3) < 1e-9
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 # --- scripts/nuisance_report.py, against judges with known behaviour ---------
 
 def _fake_scores(nuisance: float, pq_baseline=20.0, pq_enhance=25.0,
@@ -646,6 +731,8 @@ TESTS = [test_shuffle_is_a_permutation, test_shuffle_is_deterministic,
          test_draw_boxes_marks_only_the_presented_regions,
          test_reward_rises_with_pq_at_fixed_phi,
          test_build_requests_under_every_presentation,
+         test_bbox_frame_pixel_is_unchanged_and_norm1000_scales,
+         test_region_overlap_measures_damage_in_other_boxes,
          test_report_clears_a_nuisance_immune_judge,
          test_report_catches_a_nuisance_sensitive_judge,
          test_report_catches_the_aes_exploit,

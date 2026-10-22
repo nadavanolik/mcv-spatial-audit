@@ -1,0 +1,129 @@
+#!/bin/bash
+#SBATCH --job-name=mcv.analyze
+#SBATCH --partition=a100-public
+#SBATCH --qos=4h_0g
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
+#SBATCH --time=02:00:00
+#SBATCH --no-requeue
+#SBATCH --output=/home/noamakkerman/logs/mcv/analyze_%j.out
+#
+# Every CPU analysis over the new judge output. Starts when the whole judge
+# array has ended (afterany: a failed cell must not strand this job), runs
+# every analysis whose inputs are complete, lists what was skipped in
+# MISSING.txt, and exits 1 if anything was. Resubmit the failed judge cells,
+# then this job alone:
+#
+#   sbatch --export=ALL,RUN=athena_2026-10-22 analyze.job
+#
+# Per main run (main_qwen_pixel, main_qwen_norm, main_ivl8):
+#   stage 4, reward and phi, floor-excluded, drift + overlap splits  (#1 #21 #26)
+#   pq_response with the pre-registered perception gate              (#8)
+#   bbox_frame_check on the boxes each run echoed                    (#5)
+# Across runs:
+#   compare_runs  A10 committed vs main_qwen_pixel    hardware drift
+#                 main_qwen_pixel vs main_qwen_norm   effect of the box frame
+# Per nuisance run (nuis_qwen, nuis_ivl8):
+#   nuisance_report, reward/phi x all/floor-excluded, damage from that judge's
+#   main run                                                         (#15 #16)
+# judge_agreement over both nuisance runs                            (#16)
+
+set -euo pipefail
+source "$HOME/mcv-spatial-audit/jobs/athena/env.sh"
+cd "$REPO"
+banner "analyze"
+
+MISSING="$OUT/MISSING.txt"
+: > "$MISSING"
+
+# complete <tag>: every grid cell of <tag> has its parquet. Logs what is absent.
+complete() {
+    local ok=0 tag model frame tiles maxlen util profile pres shard of f
+    while read -r tag model frame tiles maxlen util profile pres shard of; do
+        [[ "$tag" == "$1" ]] || continue
+        if [[ "$profile" == "main" ]]; then f="$OUT/$tag/scores_shard${shard}.parquet"
+        else f="$OUT/$tag/scores_${pres}.parquet"; fi
+        [[ -f "$f" ]] || { echo "$f" >> "$MISSING"; ok=1; }
+    done < <(grep -vE '^\s*(#|$)' "$GRID")
+    return $ok
+}
+
+C="$OUT/checks"
+S4=(--all-readouts --min-control 0
+    --drift-csv data/bases/edit_drift.csv
+    --overlap-csv "$C/overlap.csv")
+
+# --- main runs ---------------------------------------------------------------
+for TAG in main_qwen_pixel main_qwen_norm main_ivl8; do
+    complete "$TAG" || { echo "SKIP $TAG: incomplete"; continue; }
+    A="$OUT/$TAG/analysis"
+    mkdir -p "$A"
+    SC="$OUT/$TAG/scores_shard*.parquet"
+    for COL in reward phi; do
+        $PY -m src.stage4_analyze --scores "$SC" --out "$A/$COL" --col "$COL" "${S4[@]}" \
+            2>&1 | tee "$A/report_$COL.txt"
+    done
+    $PY -m scripts.pq_response --scores "$SC" --out "$A/pq_response.csv" --gate \
+        2>&1 | tee "$A/pq_response.txt"
+    $PY -m scripts.bbox_frame_check --scores "$SC" --bases data/bases \
+        --out "$A/bbox_frame.csv" 2>&1 | tee "$A/bbox_frame.txt"
+done
+
+# --- run vs run --------------------------------------------------------------
+X="$OUT/compare"
+mkdir -p "$X"
+if complete main_qwen_pixel; then
+    $PY -m scripts.compare_runs \
+        --a 'results/main_2026-09-18/scores_shard*.parquet' --a-name a10_pixel \
+        --b "$OUT/main_qwen_pixel/scores_shard*.parquet"    --b-name a100_pixel \
+        --min-control 0 --out "$X/hardware" 2>&1 | tee "$X/hardware.txt"
+fi
+if complete main_qwen_pixel && complete main_qwen_norm; then
+    $PY -m scripts.compare_runs \
+        --a "$OUT/main_qwen_pixel/scores_shard*.parquet" --a-name pixel \
+        --b "$OUT/main_qwen_norm/scores_shard*.parquet"  --b-name norm1000 \
+        --min-control 0 --out "$X/frame" 2>&1 | tee "$X/frame.txt"
+fi
+
+# --- nuisance + exploitability -----------------------------------------------
+# One nuisance_report per judge: its tables carry no judge column.
+for PAIR in nuis_qwen:main_qwen_norm nuis_ivl8:main_ivl8; do
+    TAG=${PAIR%%:*}; DMG=${PAIR##*:}
+    complete "$TAG" || { echo "SKIP $TAG: incomplete"; continue; }
+    DMG_ARG=()
+    if complete "$DMG"; then
+        DMG_ARG=(--damage-scores "$OUT/$DMG/scores_shard*.parquet")
+    else
+        echo "WARN $TAG: no damage reference, $DMG incomplete"
+    fi
+    N="$OUT/$TAG/analysis"
+    mkdir -p "$N"
+    for COL in reward phi; do
+        for FLOOR in all floor_excluded; do
+            FL=(); [[ "$FLOOR" == "floor_excluded" ]] && FL=(--min-control 0)
+            $PY -m scripts.nuisance_report --scores "$OUT/$TAG/scores_*.parquet" \
+                "${DMG_ARG[@]}" --col "$COL" "${FL[@]}" --out "$N/$FLOOR/$COL" \
+                2>&1 | tee "$N/report_${FLOOR}_$COL.txt"
+        done
+    done
+done
+
+if complete nuis_qwen && complete nuis_ivl8; then
+    mkdir -p "$OUT/agreement"
+    $PY -m scripts.judge_agreement --scores "$OUT/nuis_*/scores_*.parquet" \
+        --out "$OUT/agreement" 2>&1 | tee "$OUT/agreement/report.txt"
+fi
+
+# --- bundle ------------------------------------------------------------------
+# Everything under results/$RUN is small (parquets ~2MB per run). Copy it off
+# Athena: there are no backups there.
+tar czf "$HOME/mcv_$RUN.tar.gz" -C "$REPO/results" "$RUN"
+echo "=== bundle: $HOME/mcv_$RUN.tar.gz"
+
+if [[ -s "$MISSING" ]]; then
+    echo "=== INCOMPLETE: $(wc -l < "$MISSING") judge output(s) missing, see $MISSING" >&2
+    exit 1
+fi
+echo "=== analyze done $(date -Is)"

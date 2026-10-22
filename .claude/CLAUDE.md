@@ -179,6 +179,17 @@ scripts/judge_agreement.py    do two judges agree on the same image? the only
                         analysis that spans judges  [CPU]
 scripts/make_figures.py       report figures + tie-rate table, drawn from the
                         committed results/ CSVs only  [CPU]
+scripts/region_overlap.py     how much of each OTHER region's box the damage
+                        reached, from the rendered bytes; feeds stage4's
+                        --overlap-csv split  [CPU]
+scripts/bbox_frame_check.py   which coordinate frame the judge read our boxes
+                        in, from the bbox_2d it echoes  [CPU]
+scripts/compare_runs.py       same judge, two runs (hardware, box frame): paired
+                        scores and stage-4 headline side by side  [CPU]
+
+jobs/athena/            SLURM chain for the Athena A100s: setup.sh (login node),
+                        gate -> judge array (grid.tsv) + checks -> analyze.
+                        See the header of each file.
 
 tests/test_determinism.py   5 determinism properties
 tests/test_stage0.py        selection logic via a stub COCO (no pycocotools)

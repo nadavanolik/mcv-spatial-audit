@@ -1,0 +1,54 @@
+# One line per judge cell. judge.job --array=N reads line N (0-based, comments
+# and blank lines skipped):  grep -vE '^\s*(#|$)' grid.tsv | nl -v0 -ba
+#
+# tag            directory under results/$RUN/ the cell writes into
+# model          HF id, pre-downloaded by setup.sh (jobs run HF_HUB_OFFLINE=1)
+# frame          --bbox-frame: pixel (the committed runs) or norm1000 (#5)
+# tiles          --max-dynamic-patch, InternVL only; - for Qwen
+# maxlen         --max-model-len; 8192 for InternVL at 6 tiles (2 x 7 x 256 image tokens)
+# util           --gpu-util; one value per model across the whole grid
+# profile        manifest: out/manifest_<profile>.parquet, built by gate.job
+# presentation   stage-3 --presentation
+# shard of       hash shard of the manifest
+#
+# tag              model                       frame     tiles maxlen util  profile     presentation    shard of
+
+# --- main, Qwen3-VL-8B, pixel boxes: the committed protocol on A100. Exists to
+#     separate the hardware change from the frame change (compare_runs.py).
+main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        0     5
+main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        1     5
+main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        2     5
+main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        3     5
+main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        4     5
+
+# --- main, Qwen3-VL-8B, boxes in the model's own 0-1000 frame (#5 fix)
+main_qwen_norm     Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  main        baseline        0     5
+main_qwen_norm     Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  main        baseline        1     5
+main_qwen_norm     Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  main        baseline        2     5
+main_qwen_norm     Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  main        baseline        3     5
+main_qwen_norm     Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  main        baseline        4     5
+
+# --- main, InternVL3-8B, 0-1000 boxes, 6 tiles (#8: the second family, at 8B)
+main_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  main        baseline        0     5
+main_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  main        baseline        1     5
+main_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  main        baseline        2     5
+main_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  main        baseline        3     5
+main_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  main        baseline        4     5
+
+# --- nuisance + exploitability on the 476 clean controls, Qwen, 0-1000 boxes
+nuis_qwen          Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  nuisance150 baseline        0     1
+nuis_qwen          Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  nuisance150 noimg           0     1
+nuis_qwen          Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  nuisance150 enhance         0     1
+nuis_qwen          Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  nuisance150 enhance_target  0     1
+nuis_qwen          Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  nuisance150 shuffle         0     1
+nuis_qwen          Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  nuisance150 subset          0     1
+nuis_qwen          Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  nuisance150 box             0     1
+
+# --- the same, InternVL3-8B
+nuis_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  nuisance150 baseline        0     1
+nuis_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  nuisance150 noimg           0     1
+nuis_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  nuisance150 enhance         0     1
+nuis_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  nuisance150 enhance_target  0     1
+nuis_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  nuisance150 shuffle         0     1
+nuis_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  nuisance150 subset          0     1
+nuis_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  nuisance150 box             0     1

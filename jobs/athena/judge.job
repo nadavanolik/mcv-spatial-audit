@@ -1,0 +1,64 @@
+#!/bin/bash
+#SBATCH --job-name=mcv.judge
+#SBATCH --partition=a100-public
+#SBATCH --qos=24h_16g
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gpus=1
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=96G
+#SBATCH --time=06:00:00
+#SBATCH --array=0-28%16
+#SBATCH --no-requeue
+#SBATCH --output=/home/noamakkerman/logs/mcv/judge_%A_%a.out
+#
+# One cell of grid.tsv: render its shard into node-local scratch (stage 2),
+# judge it (stage 3), all in one job, so the variants and the judge share a
+# session by construction. Stage 3 does not resume mid-shard, so a cell is
+# all-or-nothing: it writes to a .partial file and renames on success, and a
+# cell whose parquet already exists exits 0 at once. Resubmitting the whole
+# array after a failure therefore re-runs only the missing cells.
+#
+#   sbatch --export=ALL,RUN=athena_2026-10-22 --array=7 judge.job   # one cell
+#
+# One GPU type for the whole grid (a100-public only): bf16 numerics differ
+# across GPU generations, and every comparison here is within this grid.
+# 24h_16g: 16 GPUs per user, so 29 cells run in two waves.
+
+set -euo pipefail
+source "$HOME/mcv-spatial-audit/jobs/athena/env.sh"
+cd "$REPO"
+
+read -r TAG MODEL FRAME TILES MAXLEN UTIL PROFILE PRES SHARD OF \
+    <<< "$(grid_cell "$SLURM_ARRAY_TASK_ID")"
+if [[ "$PROFILE" == "main" ]]; then
+    DEST="$OUT/$TAG/scores_shard${SHARD}.parquet"
+else
+    DEST="$OUT/$TAG/scores_${PRES}.parquet"
+fi
+banner "$TAG $MODEL frame=$FRAME tiles=$TILES $PROFILE/$PRES shard $SHARD/$OF -> $DEST"
+
+if [[ -f "$DEST" ]]; then
+    echo "already done: $DEST"
+    exit 0
+fi
+[[ -f "$OUT/gate/PASSED" ]] || { echo "gate has not passed for $RUN" >&2; exit 1; }
+mkdir -p "$(dirname "$DEST")"
+
+MANIFEST="out/manifest_${PROFILE}.parquet"
+VAR="$SCRATCH/variants"
+T0=$(date +%s)
+$PY -m src.stage2_corrupt --manifest "$MANIFEST" --bases data/bases \
+    --out "$VAR" --shard "$SHARD" --of "$OF"
+
+TILE_ARG=(); [[ "$TILES" != "-" ]] && TILE_ARG=(--max-dynamic-patch "$TILES")
+# Greedy, n=1, stated explicitly, as run_shard.sh does.
+$PY -m src.stage3_judge --manifest "$MANIFEST" --bases data/bases \
+    --variants "$VAR" --model "$MODEL" --shard "$SHARD" --of "$OF" \
+    --presentation "$PRES" --bbox-frame "$FRAME" \
+    --max-model-len "$MAXLEN" --gpu-util "$UTIL" "${TILE_ARG[@]}" \
+    --temperature 0 --n-samples 1 \
+    --out "$DEST.partial"
+mv "$DEST.partial" "$DEST"
+
+echo "=== done in $(( ($(date +%s) - T0) / 60 )) min: $DEST"

@@ -1,0 +1,103 @@
+#!/bin/bash
+#SBATCH --job-name=mcv.gate
+#SBATCH --partition=a100-public
+#SBATCH --qos=2h_2g
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gpus=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=96G
+#SBATCH --time=01:45:00
+#SBATCH --no-requeue
+#SBATCH --output=/home/noamakkerman/logs/mcv/gate_%j.out
+#
+# Everything that must hold before any GPU hour is spent. Exit non-zero on any
+# failure, and submit.sh's afterok holds the whole chain behind it.
+#
+#   1. provenance   commit (must be clean), pip freeze, GPU, model snapshots
+#   2. determinism  fixture hash == the four A10 VMs' (invariant 2)
+#   3. tests        every tests/test_*.py
+#   4. manifests    main + nuisance150, hashes == the committed runs'
+#   5. smoke        per distinct judge config in grid.tsv: --dry-run, then 12
+#                   real variants; parse rate must be >= 95%
+
+set -euo pipefail
+source "$HOME/mcv-spatial-audit/jobs/athena/env.sh"
+cd "$REPO"
+G="$OUT/gate"
+mkdir -p "$G"
+banner "gate"
+
+# --- 1. provenance -----------------------------------------------------------
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    echo "FAIL: working tree has local changes; results must map to a commit" >&2
+    git status --short >&2
+    exit 1
+fi
+{
+    echo "commit $(git rev-parse HEAD)"
+    echo "host   $(hostname)"
+    nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+    for d in "$HOME"/.cache/huggingface/hub/models--{Qwen--Qwen3-VL-8B-Instruct,OpenGVLab--InternVL3-8B}; do
+        echo "model  $(basename "$d")  snapshot $(cat "$d/refs/main")"
+    done
+} | tee "$G/provenance.txt"
+$PY -m pip freeze > "$G/pip_freeze.txt"
+
+# --- 2. determinism ----------------------------------------------------------
+bash scripts/verify_determinism.sh 2>&1 | tee "$G/determinism.txt"
+GOT=$(grep -o 'CROSS-VM FIXTURE HASH: [0-9a-f]*' "$G/determinism.txt" | awk '{print $4}')
+if [[ "$GOT" != "$FIXTURE_HASH" ]]; then
+    echo "FAIL: fixture hash $GOT != $FIXTURE_HASH; this node renders different bytes" >&2
+    exit 1
+fi
+
+# --- 3. tests ----------------------------------------------------------------
+for t in tests/test_*.py; do
+    echo "--- $t"
+    $PY "$t" 2>&1 | tee -a "$G/tests.txt"
+done
+
+# --- 4. manifests ------------------------------------------------------------
+mkdir -p out
+for P in main nuisance150; do
+    $PY -m src.build_manifest --profile "$P" --out "out/manifest_$P.parquet" \
+        2>&1 | tee "$G/manifest_$P.txt"
+    WANT_VAR="MANIFEST_SHA_$P"
+    GOT=$(grep -o 'sha256\[:16\] = [0-9a-f]*' "$G/manifest_$P.txt" | awk '{print $3}')
+    if [[ "$GOT" != "${!WANT_VAR}" ]]; then
+        echo "FAIL: manifest $P hash $GOT != ${!WANT_VAR}; the design matrix differs" >&2
+        exit 1
+    fi
+done
+
+# --- 5. smoke, one per distinct judge config ---------------------------------
+# 1/50th of main is ~105 variants; render it, judge 12. Exercises the engine
+# start, the frame and tile flags, and schema-constrained parsing on A100.
+VAR="$SCRATCH/smoke_variants"
+$PY -m src.stage2_corrupt --manifest out/manifest_main.parquet \
+    --bases data/bases --out "$VAR" --shard 0 --of 50
+
+# Inner commands read </dev/null so none of them can swallow the config list.
+while read -r MODEL FRAME TILES MAXLEN UTIL; do
+    NAME="$(basename "$MODEL")_$FRAME"
+    TILE_ARG=(); [[ "$TILES" != "-" ]] && TILE_ARG=(--max-dynamic-patch "$TILES")
+    ARGS=(--manifest out/manifest_main.parquet --bases data/bases --variants "$VAR"
+          --model "$MODEL" --shard 0 --of 50 --limit 12
+          --bbox-frame "$FRAME" --max-model-len "$MAXLEN" --gpu-util "$UTIL"
+          --temperature 0 --n-samples 1 "${TILE_ARG[@]}")
+    echo "=== smoke $NAME"
+    $PY -m src.stage3_judge "${ARGS[@]}" --dry-run </dev/null 2>&1 \
+        | tee "$G/dryrun_$NAME.txt"
+    $PY -m src.stage3_judge "${ARGS[@]}" --out "$G/smoke_$NAME.parquet" </dev/null 2>&1 \
+        | tee "$G/smoke_$NAME.txt"
+    $PY -c '
+import sys, pandas as pd
+df = pd.read_parquet(sys.argv[1])
+rate = df.parsed.mean()
+print(f"smoke parse rate {rate:.1%} over {df.variant_id.nunique()} variants")
+sys.exit(0 if rate >= 0.95 else 1)' "$G/smoke_$NAME.parquet" </dev/null
+done < <(grep -vE '^\s*(#|$)' "$GRID" | awk '{print $2, $3, $4, $5, $6}' | sort -u)
+
+touch "$G/PASSED"
+echo "=== gate passed $(date -Is)"

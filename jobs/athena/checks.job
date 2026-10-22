@@ -1,0 +1,68 @@
+#!/bin/bash
+#SBATCH --job-name=mcv.checks
+#SBATCH --partition=a100-public
+#SBATCH --qos=4h_0g
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
+#SBATCH --time=03:00:00
+#SBATCH --no-requeue
+#SBATCH --output=/home/noamakkerman/logs/mcv/checks_%j.out
+#
+# CPU-only checks that need no new judge output. Runs beside the judge array.
+#
+#   #2  verify_corruption over all 150 photos (was 5 pilot photos)
+#   #1  region_overlap: for every corrupted variant and every OTHER region,
+#       the share of changed pixels inside that region's box -- measured on
+#       the rendered bytes, not modelled from the mask
+#   #5  bbox_frame_check on the committed A10 run: which frame did Qwen read?
+#   #21 #26 #1  the committed A10 runs re-analysed with the new stage 4
+#       (permutation-null coherence, delta redundancy, overlap split)
+#
+# Outputs under results/$RUN/checks/ and results/$RUN/committed/.
+
+set -euo pipefail
+source "$HOME/mcv-spatial-audit/jobs/athena/env.sh"
+cd "$REPO"
+C="$OUT/checks"
+mkdir -p "$C"
+banner "checks"
+
+# Every corrupted variant of main, rendered once here (~5 min on 8 cores).
+VAR="$SCRATCH/variants"
+$PY -m src.stage2_corrupt --manifest out/manifest_main.parquet \
+    --bases data/bases --out "$VAR" --shard 0 --of 1
+
+# --- #2 ----------------------------------------------------------------------
+$PY -m scripts.verify_corruption --manifest out/manifest_main.parquet \
+    --bases data/bases --variants "$VAR" 2>&1 | tee "$C/verify_corruption.txt"
+
+# --- #1 ----------------------------------------------------------------------
+$PY -m scripts.region_overlap --manifest out/manifest_main.parquet \
+    --bases data/bases --variants "$VAR" --out "$C/overlap.csv" \
+    2>&1 | tee "$C/overlap.txt"
+
+# --- #5 ----------------------------------------------------------------------
+$PY -m scripts.bbox_frame_check \
+    --scores 'results/main_2026-09-18/scores_shard*.parquet' \
+    --bases data/bases --out "$C/bbox_frame_committed.csv" \
+    2>&1 | tee "$C/bbox_frame_committed.txt"
+
+# --- committed runs, new stage 4 ---------------------------------------------
+# Same commands as results/*/REPRODUCE.md, plus the overlap split, into a
+# separate tree so the committed CSVs stay untouched for comparison.
+S4=(--all-readouts --min-control 0
+    --drift-csv data/bases/edit_drift.csv
+    --overlap-csv "$C/overlap.csv")
+mkdir -p "$OUT/committed"
+for COL in reward phi; do
+    $PY -m src.stage4_analyze --scores 'results/main_2026-09-18/scores_shard*.parquet' \
+        --out "$OUT/committed/main_qwen_a10/$COL" --col "$COL" "${S4[@]}" \
+        2>&1 | tee "$OUT/committed/main_qwen_a10_$COL.txt"
+    $PY -m src.stage4_analyze --scores 'results/internvl3_2b_2026-09-26/scores_shard*.parquet' \
+        --out "$OUT/committed/main_ivl2_a10/$COL" --col "$COL" "${S4[@]}" \
+        2>&1 | tee "$OUT/committed/main_ivl2_a10_$COL.txt"
+done
+
+echo "=== checks done $(date -Is)"

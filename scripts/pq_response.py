@@ -41,13 +41,25 @@ import glob
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.stage4_analyze import collapse_flat_severity  # noqa: E402
+from src.stage4_analyze import (_ci, _photo_boot_idx,  # noqa: E402
+                                collapse_flat_severity)
 
 PQ_COLS = ["pq_naturalness", "pq_artifacts"]
+
+# THE PERCEPTION GATE, fixed 2026-10-22 BEFORE any second-judge data at 8B was
+# seen. A judge passes when its image-level AES falls by at least GATE_DAES
+# points (0-25 scale) under BOTH the strongest graded corruption (noise s3) and
+# object removal, with the photo-bootstrap interval excluding zero. Reference
+# points: Qwen3-VL-8B -2.68 / -2.50, InternVL3-2B -0.11 / -0.04. A judge that
+# fails cannot inform on attribution: its localization AUROC measures the
+# instrument, not the protocol, and is not reported as a result.
+GATE_DAES = -1.0
+GATE_CELLS = [("noise", "3"), ("remove", "binary")]
 
 
 def pq_response(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
@@ -81,13 +93,49 @@ def pq_response(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
                 AES_unchanged=("d_aes", lambda x: float((x == 0).mean())),
                 AES_dropped=("d_aes", lambda x: float((x < 0).mean())))
            .reset_index())
+
+    # 95% interval on d_AES resampling photographs (a photo's variants share
+    # one edit and one clean control).
+    lo, hi = [], []
+    for (c, s), g in m.groupby(["corruption", "severity"]):
+        codes = pd.Categorical(g.base_id).codes
+        k = int(codes.max()) + 1
+        tot = np.bincount(codes, weights=g.d_aes.fillna(0).to_numpy(), minlength=k)
+        cnt = np.bincount(codes, weights=g.d_aes.notna().to_numpy(float), minlength=k)
+        idx = _photo_boot_idx(k)
+        a, b = _ci(tot[idx].sum(1) / cnt[idx].sum(1))
+        lo.append(a)
+        hi.append(b)
+    tbl["d_AES_lo"], tbl["d_AES_hi"] = lo, hi
     return tbl, ctrl["c_aes"]
+
+
+def perception_gate(tbl: pd.DataFrame) -> tuple[bool, list]:
+    """Apply the pre-registered gate (GATE_DAES, GATE_CELLS) to the table."""
+    lines, ok = [], True
+    for corr, sev in GATE_CELLS:
+        r = tbl[(tbl.corruption == corr) & (tbl.severity.astype(str) == sev)]
+        if r.empty:
+            lines.append(f"  {corr} {sev}: MISSING")
+            ok = False
+            continue
+        r = r.iloc[0]
+        cell = bool(r.d_AES <= GATE_DAES and r.d_AES_hi < 0)
+        ok &= cell
+        lines.append(f"  {corr} {sev}: dAES {r.d_AES:+.3f} [{r.d_AES_lo:+.3f}, "
+                     f"{r.d_AES_hi:+.3f}]  {'pass' if cell else 'FAIL'}")
+    return ok, lines
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scores", required=True)
     ap.add_argument("--out", default="out/analysis/pq_response.csv")
+    ap.add_argument("--gate", action="store_true",
+                    help="apply the pre-registered perception gate and write "
+                         "PERCEPTION_PASS or PERCEPTION_FAIL beside --out. "
+                         "Never changes the exit code: a failing judge is a "
+                         "result, not an error.")
     a = ap.parse_args()
 
     files = sorted(glob.glob(a.scores))
@@ -108,6 +156,18 @@ def main():
 
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     tbl.round(4).to_csv(a.out, index=False)
+
+    if a.gate:
+        ok, lines = perception_gate(tbl)
+        verdict = "PERCEPTION_PASS" if ok else "PERCEPTION_FAIL"
+        print(f"\n=== perception gate (dAES <= {GATE_DAES} and CI below 0 on "
+              f"every cell) ===")
+        print("\n".join(lines))
+        print(f"  -> {verdict}")
+        for old in ("PERCEPTION_PASS", "PERCEPTION_FAIL"):
+            (Path(a.out).parent / old).unlink(missing_ok=True)
+        (Path(a.out).parent / verdict).write_text(
+            f"judges={sorted(df.judge.unique())}\n" + "\n".join(lines) + "\n")
     print(f"\nwrote {a.out}")
 
 
