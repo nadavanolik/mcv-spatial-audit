@@ -11,15 +11,9 @@
 # presentation   stage-3 --presentation
 # shard of       hash shard of the manifest
 #
+# Order is priority: tasks start roughly in index order when GPUs are scarce.
+#
 # tag              model                       frame     tiles maxlen util  profile     presentation    shard of
-
-# --- main, Qwen3-VL-8B, pixel boxes: the committed protocol on A100. Exists to
-#     separate the hardware change from the frame change (compare_runs.py).
-main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        0     5
-main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        1     5
-main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        2     5
-main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        3     5
-main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        4     5
 
 # --- main, Qwen3-VL-8B, boxes in the model's own 0-1000 frame (#5 fix)
 main_qwen_norm     Qwen/Qwen3-VL-8B-Instruct   norm1000  -     4096   0.89  main        baseline        0     5
@@ -52,3 +46,13 @@ nuis_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  nuis
 nuis_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  nuisance150 shuffle         0     1
 nuis_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  nuisance150 subset          0     1
 nuis_ivl8          OpenGVLab/InternVL3-8B      norm1000  6     8192   0.89  nuisance150 box             0     1
+
+# --- main, Qwen3-VL-8B, pixel boxes: the committed protocol on A100. Exists to
+#     separate the hardware change from the frame change (compare_runs.py).
+#     LAST on purpose: on a busy partition the cells the report needs run
+#     first, and these can be cancelled (scancel <job>_[24-28]) if time runs out.
+main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        0     5
+main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        1     5
+main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        2     5
+main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        3     5
+main_qwen_pixel    Qwen/Qwen3-VL-8B-Instruct   pixel     -     4096   0.89  main        baseline        4     5
