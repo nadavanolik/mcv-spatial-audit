@@ -6,6 +6,12 @@
 
 REPO="$HOME/mcv-spatial-audit"
 PY="$REPO/.venv/bin/python"
+
+# The venv first on PATH, as `source activate` would. scripts/*.sh call bare
+# `python`, and without this a batch job gets the system interpreter, which has
+# none of the pinned packages (gate 268712 died on "No module named 'cv2'").
+export VIRTUAL_ENV="$REPO/.venv"
+export PATH="$VIRTUAL_ENV/bin:$PATH"
 GRID="$REPO/jobs/athena/grid.tsv"
 
 # One results tree per submission. submit.sh exports RUN to every job, so the
