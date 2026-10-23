@@ -12,7 +12,7 @@
 #SBATCH --no-requeue
 #SBATCH --output=/home/noamakkerman/logs/mcv/judge_%A_%a.out
 #
-# One cell of grid.tsv: render its shard into node-local scratch (stage 2),
+# One cell of grid.tsv: render its shard into per-task scratch (stage 2),
 # judge it (stage 3), all in one job, so the variants and the judge share a
 # session by construction. Stage 3 does not resume mid-shard, so a cell is
 # all-or-nothing: it writes to a .partial file and renames on success, and a

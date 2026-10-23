@@ -34,9 +34,15 @@ export HF_HUB_OFFLINE=1
 export PYTHONUNBUFFERED=1
 export TOKENIZERS_PARALLELISM=false
 
-# Variants are regenerated per job into node-local NVMe, never onto /home
-# (invariant 1: regenerate, don't transfer). $TMPDIR is wiped when the job ends.
-SCRATCH="${TMPDIR:-/tmp/$USER/${SLURM_JOB_ID:-manual}}/mcv"
+# Variants are regenerated per job (invariant 1: regenerate, don't transfer).
+# The directory is keyed on the job AND array task, never on $TMPDIR alone:
+# sbatch --export=ALL carries the login shell's TMPDIR into the job, and there
+# it pointed at shared group storage, so every judge task rendered into ONE
+# directory. Three shard-0 cells rewrote the same PNGs at once and a reader
+# caught one mid-write (UnidentifiedImageError, task 268721_0). Removed on exit
+# because shared storage is not wiped when the job ends.
+SCRATCH="${TMPDIR:-/tmp/$USER}/mcv/${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}_${SLURM_ARRAY_TASK_ID:-0}"
+trap 'rm -rf "$SCRATCH"' EXIT
 
 # grid_cell <index>  -- 0-based, comments and blank lines skipped.
 grid_cell() {
