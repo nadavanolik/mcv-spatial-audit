@@ -10,8 +10,14 @@ out/
 .env
 hf_token*
 
+# Personal review notes, not part of the deliverable
+notes/
+
 # Exception: committed run outputs under results/ ARE tracked -- the summary
 # CSVs and the small (~1.8MB total) raw score parquets, so all four analyses
 # reproduce on any laptop with no GPU. Only bulk/regenerable parquets in out/
 # stay ignored.
 !results/**/*.parquet
+
+# macOS
+.DS_Store

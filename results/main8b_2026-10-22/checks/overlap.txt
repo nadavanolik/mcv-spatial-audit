@@ -1,0 +1,16 @@
+  1000/4760 variants
+  2000/4760 variants
+  3000/4760 variants
+  4000/4760 variants
+
+=== visible damage inside OTHER regions' boxes ===
+corruption  n_pairs  pairs_any  pairs_over_10pct  mean_box_damaged  n_photos  photos_any  photos_over_10pct
+       all    10640      0.511             0.166             0.057       150         134                104
+      blur     2128      0.520             0.166             0.054       150         134                 94
+      jpeg     2128      0.514             0.147             0.050       150         133                 92
+     noise     2128      0.516             0.168             0.060       150         134                103
+    remove     2128      0.508             0.199             0.069       150         132                 94
+  saturate     2128      0.499             0.150             0.052       150         131                 88
+
+box geometry: 54.7% of region pairs' boxes intersect; 24.6% have the smaller box more than half covered
+wrote results/main8b_2026-10-22/checks/overlap.csv (10640 rows)

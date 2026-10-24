@@ -1,0 +1,2 @@
+readout,judge,version,r2,r2_lo,r2_hi,n,n_photos
+sc_success,Qwen/Qwen3-VL-8B-Instruct,delta_untouched,0.23571354017350815,0.11064047111940244,0.35356002028133066,5760,95

@@ -1,6 +1,6 @@
 # Team brief
 
-Updated 2026-10-14. Start here — this is the plain-language version.
+Updated 2026-10-24. Start here — this is the plain-language version.
 Setup commands, repo structure and constraints live in [`README.md`](../../README.md).
 
 ---
@@ -53,9 +53,33 @@ will discount everything else.
 
 Two smaller ones in the same spirit: half the scoring prompt (the image-quality
 half) is **our reconstruction**, because the paper never printed it — so any
-number involving overall image quality inherits that guess. And every
-"doesn't find the damage" result is **one judge**, Qwen; see the second-judge
-note further down for why the other model doesn't count yet.
+number involving overall image quality inherits that guess. The "doesn't find
+the damage" result now holds for **two judges from different families**, Qwen3-VL-8B
+and InternVL3-8B; the older notes below about the second judge not counting
+were about the small 2B version and are out of date.
+
+## The report is written (2026-10-24)
+
+The draft is `paper/main.tex` (compiled PDF next to it), three pages plus
+appendices. Its numbers come from a final re-run, `results/main8b_2026-10-22/`,
+with two upgrades over everything below: the second judge is the 8B InternVL,
+which *does* see the damage, and the region boxes are given in the coordinate
+system both models were trained on. What it says, in the form to repeat out
+loud:
+
+1. **Both judges notice the damage.** Their whole-picture quality score drops,
+   most for heavy noise and object removal.
+2. **Neither can say which region was damaged.** The "which region was hit?"
+   test scores 0.52 (Qwen) and 0.54 (InternVL), where 0.50 is a coin flip. The
+   damaged region keeps exactly the same score about as often as untouched ones.
+3. **Shuffling the order of the region list moves a region's score 1.6-1.8 times
+   as much as damaging it**, on the same clean image. Nothing in the picture
+   changed.
+4. **Hide the images and failed edits score higher** — the judge falls back to a
+   high default score.
+
+Where each number comes from is in `results/README.md`; the full account is in
+`docs/FINDINGS.md`. The sections below are the history that led here.
 
 ## Where we are
 

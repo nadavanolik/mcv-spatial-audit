@@ -1,0 +1,2 @@
+5236 variants (476 controls) -> out/manifest_main.parquet
+manifest sha256[:16] = 1d862ad6ce725e26   <- all VMs must report this value

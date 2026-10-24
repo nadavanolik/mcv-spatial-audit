@@ -1,0 +1,2 @@
+judge,n_variants,n_photos,regions_per_variant,per_region_move_rate,frac_none,frac_all,frac_mixed,frac_mixed_lo,frac_mixed_hi,mixed_null,mixed_null_lo,mixed_null_hi,gap,gap_lo,gap_hi,mixed_if_independent
+Qwen/Qwen3-VL-8B-Instruct,3760,119,3.0,0.228125,0.5957446808510638,0.05771276595744681,0.34654255319148936,0.28437302668569703,0.4077210191945696,0.3915186170212766,0.3875,0.3960239361702128,-0.04497606382978725,-0.05807013835837363,-0.03231467469005401,0.5282519531250001

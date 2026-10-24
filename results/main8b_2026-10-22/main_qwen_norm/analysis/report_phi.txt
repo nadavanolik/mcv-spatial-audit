@@ -1,0 +1,156 @@
+loaded 22176 rows from 5 shards, judges=['Qwen/Qwen3-VL-8B-Instruct']
+parse rate: 100.0%
+
+=== score distributions (all rows) ===
+          reward        phi  sc_preserve  sc_success
+count  22176.000  22176.000    16940.000   16940.000
+mean       0.611     17.089       16.777      16.607
+std        0.342     10.133       10.560      10.400
+min        0.000      0.000        0.000       0.000
+25%        0.447     10.000        5.000       5.000
+50%        0.800     25.000       25.000      25.000
+75%        0.849     25.000       25.000      25.000
+max        0.980     25.000       25.000      25.000
+
+=== measurement quality (read this before any result below) ===
+  phi: range 0.000-25.000, 74.5% of values sit on a rail
+  noise floor is undefined (n_samples=1: no within-variant spread to measure).
+  Judge effects against the between-variant SD below, and against the tie rate.
+  between-variant SD of clean controls: 9.934
+
+=== noise floor, phi (SD across repeats, clean controls) ===
+                    judge  mean  median  max
+Qwen/Qwen3-VL-8B-Instruct   NaN     NaN  NaN
+
+=== targeted region: which axis moves? ===
+                    judge corruption severity  sc_success  sc_preserve    phi  reward
+Qwen/Qwen3-VL-8B-Instruct       blur        1      16.628       16.807 16.092   0.586
+Qwen/Qwen3-VL-8B-Instruct       blur        3      15.914       15.914 15.200   0.552
+Qwen/Qwen3-VL-8B-Instruct       jpeg        1      16.849       16.838 16.324   0.596
+Qwen/Qwen3-VL-8B-Instruct       jpeg        3      17.069       17.174 16.450   0.587
+Qwen/Qwen3-VL-8B-Instruct      noise        1      16.849       16.849 16.292   0.596
+Qwen/Qwen3-VL-8B-Instruct      noise        3      16.492       16.712 16.103   0.556
+Qwen/Qwen3-VL-8B-Instruct       none        0      17.069       17.353 16.723   0.610
+Qwen/Qwen3-VL-8B-Instruct     remove   binary      15.709       15.741 14.953   0.541
+Qwen/Qwen3-VL-8B-Instruct   saturate        1      17.006       17.185 16.576   0.602
+Qwen/Qwen3-VL-8B-Instruct   saturate        3      17.216       17.311 16.775   0.605
+  --min-control 0.0: kept 16220/20160 rows (80.5%)
+
+=== does the score move at all? (delta == 0 exactly) ===
+                    judge corruption severity  n_target  target_unchanged  target_dropped  target_rose  other_unchanged
+Qwen/Qwen3-VL-8B-Instruct       blur        1       371             0.768           0.167        0.065            0.816
+Qwen/Qwen3-VL-8B-Instruct       blur        3       371             0.671           0.267        0.062            0.758
+Qwen/Qwen3-VL-8B-Instruct       jpeg        1       371             0.825           0.113        0.062            0.838
+Qwen/Qwen3-VL-8B-Instruct       jpeg        3       371             0.755           0.189        0.057            0.783
+Qwen/Qwen3-VL-8B-Instruct      noise        1       371             0.836           0.102        0.062            0.838
+Qwen/Qwen3-VL-8B-Instruct      noise        3       371             0.744           0.202        0.054            0.763
+Qwen/Qwen3-VL-8B-Instruct     remove   binary       742             0.635           0.310        0.055            0.714
+Qwen/Qwen3-VL-8B-Instruct   saturate        1       371             0.841           0.092        0.067            0.834
+Qwen/Qwen3-VL-8B-Instruct   saturate        3       371             0.817           0.097        0.086            0.831
+
+  Up to 84% of DAMAGED regions get a score identical to their clean
+  control. Where the score never moves, no ranking metric below can say
+  anything: AUROC 0.5 there means 'did not react', not 'reacted in the
+  wrong place'. Report the tie rate alongside every AUROC.
+
+=== do a variant's regions move together? ===
+                    judge  n_variants  n_photos  regions_per_variant  per_region_move_rate  frac_none  frac_all  frac_mixed  frac_mixed_lo  frac_mixed_hi  mixed_null  mixed_null_lo  mixed_null_hi    gap  gap_lo  gap_hi  mixed_if_independent
+Qwen/Qwen3-VL-8B-Instruct        3760       119                  3.0                 0.228      0.596     0.058       0.347          0.284          0.408       0.392          0.388          0.396 -0.045  -0.058  -0.032                 0.528
+  Baseline is mixed_null (permutation within photo x condition),
+  NOT mixed_if_independent (one pooled rate; kept for tracing).
+
+  Qwen/Qwen3-VL-8B-Instruct: 35% of variants mixed against 39% if regions moved
+  independently (gap -0.045 [-0.058, -0.032], photo bootstrap): regions co-move.
+
+=== localization AUROC by severity ===
+  (remove has no severity ladder - its 1 and 3 differ by 0.5 of 35 8-bit
+   levels - so it reports as one 'binary' row rather than flattening 1 and 3.)
+  --min-control 0.0: kept 16220/20160 rows (80.5%)
+readout                     judge severity  auroc    n  n_target   ties  mean_delta_target  mean_delta_other
+ reward Qwen/Qwen3-VL-8B-Instruct        1 0.5143 4752      1484 0.6164            -0.0240           -0.0199
+ reward Qwen/Qwen3-VL-8B-Instruct        3 0.5296 4752      1484 0.3939            -0.0672           -0.0491
+ reward Qwen/Qwen3-VL-8B-Instruct   binary 0.5380 2376       742 0.2934            -0.1209           -0.0884
+readout                     judge severity  auroc    n  n_target   ties  mean_delta_target  mean_delta_other
+    phi Qwen/Qwen3-VL-8B-Instruct        1 0.5108 4752      1484 0.8272            -0.5961           -0.4514
+    phi Qwen/Qwen3-VL-8B-Instruct        3 0.5251 4752      1484 0.7721            -1.2633           -0.6917
+    phi Qwen/Qwen3-VL-8B-Instruct   binary 0.5445 2376       742 0.6894            -2.9951           -1.6699
+  [sc_preserve] using 16940/22176 rows (5236 missing this readout)
+  --min-control 0.0: kept 11880/15400 rows (77.1%)
+    readout                     judge severity  auroc    n  n_target   ties  mean_delta_target  mean_delta_other
+sc_preserve Qwen/Qwen3-VL-8B-Instruct        1 0.5064 4752      1484 0.8199            -0.6269           -0.5063
+sc_preserve Qwen/Qwen3-VL-8B-Instruct        3 0.5207 4752      1484 0.7771            -1.2873           -0.7588
+sc_preserve Qwen/Qwen3-VL-8B-Instruct   binary 0.5480 2376       742 0.6999            -2.9652           -1.6921
+  [sc_success] using 16940/22176 rows (5236 missing this readout)
+  --min-control 0.0: kept 11880/15400 rows (77.1%)
+   readout                     judge severity  auroc    n  n_target   ties  mean_delta_target  mean_delta_other
+sc_success Qwen/Qwen3-VL-8B-Instruct        1 0.5085 4752      1484 0.8449            -0.3929           -0.3387
+sc_success Qwen/Qwen3-VL-8B-Instruct        3 0.5240 4752      1484 0.7879            -1.0802           -0.5897
+sc_success Qwen/Qwen3-VL-8B-Instruct   binary 0.5434 2376       742 0.7083            -2.5391           -1.4639
+
+=== localization AUROC by corruption type ===
+                    judge corruption  auroc    n  mean_delta_target  mean_delta_other
+Qwen/Qwen3-VL-8B-Instruct       blur 0.5356 2376            -1.6945           -0.8033
+Qwen/Qwen3-VL-8B-Instruct       jpeg 0.5236 2376            -0.8387           -0.4790
+Qwen/Qwen3-VL-8B-Instruct      noise 0.5143 2376            -0.8589           -0.6442
+Qwen/Qwen3-VL-8B-Instruct     remove 0.5445 2376            -2.9951           -1.6699
+Qwen/Qwen3-VL-8B-Instruct   saturate 0.4982 2376            -0.3266           -0.3596
+
+=== leakage matrix (phi): Qwen/Qwen3-VL-8B-Instruct ===
+scored_region_id      0      1      2      3      4     bg
+target_region_id                                          
+0                -1.299 -0.915 -1.441 -0.192 -4.000 -0.793
+1                -0.832 -1.598 -1.077  0.231 -0.833 -0.887
+2                -0.631 -0.510 -1.259 -0.654 -0.833 -0.445
+3                 0.234  0.050  0.033  0.000 -0.833 -0.279
+4                 0.000  0.000  2.750  0.750 -1.833  0.667
+
+=== redundancy on DELTAS of untouched regions (quote this) ===
+readout                     judge         version     r2  r2_lo  r2_hi    n  n_photos
+ reward Qwen/Qwen3-VL-8B-Instruct delta_untouched 0.2632 0.1682 0.3792 7690       119
+readout                     judge         version     r2  r2_lo  r2_hi    n  n_photos
+    phi Qwen/Qwen3-VL-8B-Instruct delta_untouched 0.1388 0.0659  0.227 7690       119
+    readout                     judge         version     r2  r2_lo  r2_hi    n  n_photos
+sc_preserve Qwen/Qwen3-VL-8B-Instruct delta_untouched 0.1455 0.0683 0.2293 7690       119
+   readout                     judge         version     r2  r2_lo  r2_hi    n  n_photos
+sc_success Qwen/Qwen3-VL-8B-Instruct delta_untouched 0.1215 0.0608 0.2008 7690       119
+
+=== redundancy on score LEVELS (legacy; a perfect judge scores high too) ===
+readout                     judge version     r2  r2_lo  r2_hi     n  n_photos
+ reward Qwen/Qwen3-VL-8B-Instruct   level 0.3979 0.2721 0.5313 16940       150
+readout                     judge version     r2  r2_lo  r2_hi     n  n_photos
+    phi Qwen/Qwen3-VL-8B-Instruct   level 0.3319 0.2131 0.4502 16940       150
+  [sc_preserve] using 16940/22176 rows (5236 missing this readout)
+    readout                     judge version     r2  r2_lo  r2_hi     n  n_photos
+sc_preserve Qwen/Qwen3-VL-8B-Instruct   level 0.3634 0.2373 0.4843 16940       150
+  [sc_success] using 16940/22176 rows (5236 missing this readout)
+   readout                     judge version     r2  r2_lo  r2_hi     n  n_photos
+sc_success Qwen/Qwen3-VL-8B-Instruct   level 0.3597 0.2325 0.4876 16940       150
+
+=== robustness: bases whose layout survived the edit (edge IoU >= 0.4) ===
+       subset                     judge  n_bases  n_rows  target_unchanged  other_unchanged  auroc  frac_mixed  mixed_null     gap  gap_lo  gap_hi  r2_delta  r2_delta_lo  r2_delta_hi  mixed_if_independent
+          all Qwen/Qwen3-VL-8B-Instruct      131   11880            0.7526           0.7890 0.5226      0.3465      0.3915 -0.0450 -0.0581 -0.0323    0.1388       0.0659       0.2270                0.5283
+edge_iou>=0.4 Qwen/Qwen3-VL-8B-Instruct       81    7560            0.7597           0.7998 0.5248      0.3193      0.3722 -0.0529 -0.0703 -0.0368    0.1733       0.0533       0.3252                0.5095
+  Agreement across the two rows means the conclusion does not rest on bases
+  where a source-coordinate mask may no longer cover its object. Divergence
+  means the masks need a per-region check against an independent detector -
+  never against the judge under audit.
+
+=== robustness: damage kept out of other regions' boxes (thresholds [0.0, 0.1]) ===
+     subset                     judge  n_bases  n_rows  target_unchanged  other_unchanged  auroc  frac_mixed  mixed_null     gap  gap_lo  gap_hi  r2_delta  r2_delta_lo  r2_delta_hi  mixed_if_independent
+        all Qwen/Qwen3-VL-8B-Instruct      131   11880            0.7526           0.7890 0.5226      0.3465      0.3915 -0.0450 -0.0581 -0.0323    0.1388       0.0659       0.2270                0.5283
+ pairs<=0.0 Qwen/Qwen3-VL-8B-Instruct      131    7542            0.7526           0.7704 0.5208      0.2907      0.3264 -0.0357 -0.0524 -0.0206    0.0970       0.0188       0.2512                0.3769
+photos<=0.0 Qwen/Qwen3-VL-8B-Instruct       19    1230            0.8268           0.8061 0.4834      0.3385      0.3915 -0.0531 -0.1113 -0.0107    0.0688       0.0002       0.3704                0.5035
+ pairs<=0.1 Qwen/Qwen3-VL-8B-Instruct      131   10519            0.7526           0.7998 0.5278      0.3185      0.3587 -0.0401 -0.0544 -0.0273    0.0883       0.0410       0.1475                0.5186
+photos<=0.1 Qwen/Qwen3-VL-8B-Instruct       43    3240            0.7574           0.7708 0.4920      0.4362      0.4740 -0.0378 -0.0622 -0.0167    0.0626       0.0073       0.1358                0.5630
+
+--- leakage by spatial relation ---
+                    judge                      relation    n  n_bases  mean_delta  frac_moved
+Qwen/Qwen3-VL-8B-Instruct                        target 3710      131     -1.3428      0.2474
+Qwen/Qwen3-VL-8B-Instruct          other, box damaged 0 3832      111     -0.8110      0.2296
+Qwen/Qwen3-VL-8B-Instruct   other, box damaged (0,0.01]  808       88     -0.3685      0.1300
+Qwen/Qwen3-VL-8B-Instruct other, box damaged (0.01,0.1] 2169      103     -0.4968      0.1743
+Qwen/Qwen3-VL-8B-Instruct  other, box damaged (0.1,0.5] 1188       88     -1.3079      0.2475
+Qwen/Qwen3-VL-8B-Instruct       other, box damaged >0.5  173       29     -2.4711      0.3873
+
+=== effect vs noise floor (phi) ===
+Qwen/Qwen3-VL-8B-Instruct: |mean delta|=1.3428 vs floor=nan  -> floor undefined (n_samples=1) - judge this by the tie rate and the between-variant SD above

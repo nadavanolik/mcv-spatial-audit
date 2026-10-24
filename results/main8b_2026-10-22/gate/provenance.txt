@@ -1,0 +1,3 @@
+commit 7f983f25abd932ecb28d32eae6e380c09bc94c1e
+model  models--Qwen--Qwen3-VL-8B-Instruct  snapshot 0c351dd01ed87e9c1b53cbc748cba10e6187ff3b
+model  models--OpenGVLab--InternVL3-8B  snapshot 853e3a797a661694b1b8ece0cb72dc2b23e3dac9

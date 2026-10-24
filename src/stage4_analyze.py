@@ -266,7 +266,42 @@ def sensitivity(d: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def response_coherence(d: pd.DataFrame) -> pd.DataFrame:
+# Resampling sizes and seed, fixed so committed CSVs reproduce byte for byte.
+N_PERM = 200
+N_BOOT = 1000
+SEED = 0
+
+# The cells a permutation null shuffles within: one photo under one corruption
+# condition. Its variants differ only in which region was damaged, and each
+# scores the same regions, so a region's move/no-move flag can be exchanged
+# between them without changing anything but which variant it sits in.
+COHERENCE_CELL = ["base_id", "corruption", "severity", "area_bin"]
+
+
+def _photo_boot_idx(n_photos: int, n_boot: int = N_BOOT, seed: int = SEED):
+    """(n_boot, n_photos) photo indices drawn with replacement.
+
+    Every interval in this module resamples PHOTOGRAPHS, not rows: a photo's
+    regions and variants share one edit, one instruction and one scene, so a
+    row-level interval would claim a precision the design does not have.
+    """
+    return np.random.default_rng(seed).integers(0, n_photos, (n_boot, n_photos))
+
+
+def _ci(x) -> tuple[float, float]:
+    lo, hi = np.nanpercentile(x, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
+def _mixed(vcode: np.ndarray, moved: np.ndarray, n_var: int) -> np.ndarray:
+    """Per variant: did some, but not all, of its regions move?"""
+    s = np.bincount(vcode, weights=moved, minlength=n_var)
+    n = np.bincount(vcode, minlength=n_var)
+    return (s > 0) & (s < n)
+
+
+def response_coherence(d: pd.DataFrame, n_perm: int = N_PERM,
+                       n_boot: int = N_BOOT, seed: int = SEED) -> pd.DataFrame:
     """Within ONE variant, do the regions move together or independently?
 
     The sensitivity table showed target_unchanged and other_unchanged equal to
@@ -274,38 +309,87 @@ def response_coherence(d: pd.DataFrame) -> pd.DataFrame:
     IDENTICAL rates suggest the judge's answer changes as a whole-image event -
     either every region of a variant differs from its control, or none does.
 
-    That is a much stronger claim than "does not localise", so it gets its own
-    test rather than an eyeball. Classify each variant as none / all / mixed by
-    how many of its regions moved, and compare the mixed fraction against what
-    independent per-region movement would produce at the same overall rate:
+    Classify each variant as none / all / mixed by how many of its regions
+    moved, and compare the mixed share against what independent per-region
+    movement would produce.
 
-        P(mixed) = 1 - p^n - (1-p)^n
+    THE BASELINE IS A PERMUTATION NULL (`mixed_null`), not a formula. Within
+    each photo x condition cell, each scored region's moved flag is shuffled
+    across that cell's variants. That keeps every region's own move rate in
+    that photo and condition and breaks only any tendency of a variant's
+    regions to move together. Observed mixed below the null = coupling.
 
-    Mixed far below that expectation means regions are not moving independently
-    - the per-region scores share one decision. Mixed at or above it is
-    consistent with independent per-region behaviour and this reading is wrong.
+    `mixed_if_independent` is the earlier closed form, 1 - p^n - (1-p)^n with
+    ONE pooled rate p. Kept only so older numbers can be traced: move rates
+    differ widely across photos and corruptions, and mixing different rates
+    always lowers the true mixed share below what one pooled rate predicts, so
+    it reads heterogeneity as coupling. On `main` (phi, floor-excluded) it
+    gave 51% against a permutation null of 34%. Do not quote it.
+
+    `gap` = frac_mixed - mixed_null, with a 95% bootstrap over photographs
+    (the null is averaged over permutations per variant first, so the interval
+    carries the photo-to-photo uncertainty of both sides).
     """
     d = d[d.scored_region_id != BG]
     rows = []
     for judge, g in d.groupby("judge"):
-        per = (g.assign(moved=(g.delta != 0).astype(int))
-                 .groupby("variant_id")
-                 .agg(n=("moved", "size"), moved=("moved", "sum")))
-        per = per[per.n > 1]
-        if per.empty:
+        g = g.assign(moved=(g.delta != 0).astype(int))
+        g = g[g.groupby("variant_id").moved.transform("size") > 1]
+        if g.empty:
             continue
+        per = (g.groupby("variant_id")
+                .agg(n=("moved", "size"), moved=("moved", "sum"),
+                     base_id=("base_id", "first")))
         pattern = np.where(per.moved == 0, "none",
                            np.where(per.moved == per.n, "all", "mixed"))
         p = float(per.moved.sum() / per.n.sum())     # overall per-region rate
         n = float(per.n.mode().iloc[0])              # typical regions/variant
         expect_mixed = 1.0 - p ** n - (1.0 - p) ** n
+
+        # Permutation null. Sorting by (cell+region, random key) gives a random
+        # permutation inside every group at once; writing it back over the
+        # group-sorted slots moves each flag to another variant of its group.
+        vcode = pd.Categorical(g.variant_id, categories=per.index).codes
+        gcode = g.groupby(COHERENCE_CELL + ["scored_region_id"]).ngroup().to_numpy()
+        moved = g.moved.to_numpy()
+        slots = np.argsort(gcode, kind="stable")
+        rng = np.random.default_rng(seed)
+        null_per_var = np.zeros(len(per))
+        null_frac = np.empty(n_perm)
+        for i in range(n_perm):
+            order = np.lexsort((rng.random(len(moved)), gcode))
+            pm = np.empty_like(moved)
+            pm[slots] = moved[order]
+            mx = _mixed(vcode, pm, len(per))
+            null_per_var += mx
+            null_frac[i] = mx.mean()
+        null_per_var /= n_perm
+
+        obs = (pattern == "mixed").astype(float)
+        pcode = pd.Categorical(per.base_id).codes
+        k = int(pcode.max()) + 1
+        ph_n = np.bincount(pcode, minlength=k).astype(float)
+        ph_obs = np.bincount(pcode, weights=obs, minlength=k)
+        ph_null = np.bincount(pcode, weights=null_per_var, minlength=k)
+        idx = _photo_boot_idx(k, n_boot, seed)
+        bn = ph_n[idx].sum(1)
+        b_obs = ph_obs[idx].sum(1) / bn
+        b_gap = b_obs - ph_null[idx].sum(1) / bn
+        m_lo, m_hi = _ci(b_obs)
+        nl_lo, nl_hi = _ci(null_frac)
+        g_lo, g_hi = _ci(b_gap)
         rows.append(dict(
-            judge=judge, n_variants=len(per),
+            judge=judge, n_variants=len(per), n_photos=k,
             regions_per_variant=n,
             per_region_move_rate=p,
             frac_none=float((pattern == "none").mean()),
             frac_all=float((pattern == "all").mean()),
-            frac_mixed=float((pattern == "mixed").mean()),
+            frac_mixed=float(obs.mean()),
+            frac_mixed_lo=m_lo, frac_mixed_hi=m_hi,
+            mixed_null=float(null_per_var.mean()),
+            mixed_null_lo=nl_lo, mixed_null_hi=nl_hi,
+            gap=float(obs.mean() - null_per_var.mean()),
+            gap_lo=g_lo, gap_hi=g_hi,
             mixed_if_independent=expect_mixed,
         ))
     return pd.DataFrame(rows)
@@ -327,26 +411,129 @@ def drift_robustness(d: pd.DataFrame, drift_csv: str, thresh: float) -> pd.DataF
     judge) worth its cost.
 
     Pooled, not averaged over the per-condition cells of sensitivity(): a mean
-    of means would weight a 3-row cell like a 300-row one.
+    of means would weight a 3-row cell like a 300-row one. One row per judge
+    and subset: an earlier version pooled every judge in the file into one row.
     """
     drift = pd.read_csv(drift_csv, dtype={"base_id": str})
     keep = set(drift.loc[drift.edge_iou >= thresh, "base_id"])
     fg = d[d.scored_region_id != BG]
-
     rows = []
-    for name, g in (("all", fg), (f"edge_iou>={thresh}",
-                                  fg[fg.base_id.isin(keep)])):
-        tgt = g[g.is_target]
-        coh = response_coherence(g)
-        auroc = (roc_auc_score(g.is_target, -g.delta)
-                 if g.is_target.nunique() > 1 else float("nan"))
+    for name, sub in (("all", fg), (f"edge_iou>={thresh}",
+                                    fg[fg.base_id.isin(keep)])):
+        rows += _subset_rows(name, sub)
+    return pd.DataFrame(rows)
+
+
+def _by_judge(t: pd.DataFrame) -> pd.DataFrame:
+    return t.set_index("judge") if "judge" in t.columns else pd.DataFrame()
+
+
+def _subset_rows(name: str, sub: pd.DataFrame) -> list:
+    """The pooled headline numbers for one subset of the delta table, per judge.
+    Shared by the drift and overlap robustness splits so they read alike."""
+    coh = _by_judge(response_coherence(sub)) if len(sub) else pd.DataFrame()
+    red = _by_judge(redundancy_delta(sub)) if len(sub) else pd.DataFrame()
+    rows = []
+    for judge, g in sub.groupby("judge"):
+        tgt, oth = g[g.is_target], g[~g.is_target]
+        c = coh.loc[judge] if judge in coh.index else None
+        r = red.loc[judge] if judge in red.index else None
         rows.append(dict(
-            subset=name, n_bases=g.base_id.nunique(), n_rows=len(g),
+            subset=name, judge=judge, n_bases=g.base_id.nunique(), n_rows=len(g),
             target_unchanged=float((tgt.delta == 0).mean()) if len(tgt) else float("nan"),
-            auroc=auroc,
-            frac_mixed=float(coh.frac_mixed.iloc[0]) if len(coh) else float("nan"),
-            mixed_if_independent=float(coh.mixed_if_independent.iloc[0]) if len(coh) else float("nan"),
+            other_unchanged=float((oth.delta == 0).mean()) if len(oth) else float("nan"),
+            auroc=(roc_auc_score(g.is_target, -g.delta)
+                   if g.is_target.nunique() > 1 else float("nan")),
+            frac_mixed=c.frac_mixed if c is not None else float("nan"),
+            mixed_null=c.mixed_null if c is not None else float("nan"),
+            gap=c.gap if c is not None else float("nan"),
+            gap_lo=c.gap_lo if c is not None else float("nan"),
+            gap_hi=c.gap_hi if c is not None else float("nan"),
+            r2_delta=r.r2 if r is not None else float("nan"),
+            r2_delta_lo=r.r2_lo if r is not None else float("nan"),
+            r2_delta_hi=r.r2_hi if r is not None else float("nan"),
+            mixed_if_independent=(c.mixed_if_independent if c is not None
+                                  else float("nan")),
         ))
+    # An empty subset is a result (e.g. no photo is free of overlap), so it
+    # still gets a row rather than vanishing from the table.
+    return rows or [dict(subset=name, n_bases=0, n_rows=0)]
+
+
+# --- region overlap (#1): does damage to one region land in another's box? --
+
+OVERLAP_BINS = [-np.inf, 0.0, 0.01, 0.1, 0.5, np.inf]
+OVERLAP_LABELS = ["0", "(0,0.01]", "(0.01,0.1]", "(0.1,0.5]", ">0.5"]
+
+
+def attach_overlap(d: pd.DataFrame, overlap_csv: str) -> pd.DataFrame:
+    """Join scripts/region_overlap.py's measurement onto the delta table.
+
+    `other_box_damaged` is the share of a NON-target region's box whose pixels
+    the corruption visibly changed. The judge is told about regions as boxes,
+    so where it is above zero a moving non-target score is not clearly a leak:
+    some of what the judge was told is that region really was damaged. Target
+    rows get 0 (not applicable). Non-target rows with no measurement get NaN
+    and are kept out of every clean subset.
+    """
+    ov = pd.read_csv(overlap_csv, dtype={"variant_id": str, "other_region_id": str})
+    ov = ov.rename(columns={"other_region_id": "scored_region_id"})
+    out = d.merge(ov[["variant_id", "scored_region_id", "other_box_damaged"]],
+                  on=["variant_id", "scored_region_id"], how="left")
+    out.loc[out.is_target, "other_box_damaged"] = 0.0
+    miss = int((~out.is_target & (out.scored_region_id != BG)
+                & out.other_box_damaged.isna()).sum())
+    if miss:
+        print(f"  WARNING: {miss} non-target rows have no overlap measurement; "
+              f"they are excluded from the clean subsets")
+    return out
+
+
+def overlap_split(d: pd.DataFrame, thresholds) -> pd.DataFrame:
+    """Headline numbers on all pairs vs pairs where the damage stayed out of the
+    other region's box.
+
+    Two cuts per threshold t:
+      pairs<=t   drop each (variant, non-target region) whose box took more
+                 than t of visible damage. Keeps every photo.
+      photos<=t  keep only photos where NO pair exceeds t. Stricter: removes
+                 any coupling that overlap could induce within a variant.
+    """
+    fg = d[d.scored_region_id != BG]
+    bad = fg[~fg.is_target]
+    rows = _subset_rows("all", fg)
+    for t in thresholds:
+        clean_pair = fg.is_target | (fg.other_box_damaged <= t)
+        rows += _subset_rows(f"pairs<={t}", fg[clean_pair])
+        dirty = set(bad.loc[~(bad.other_box_damaged <= t), "base_id"])
+        rows += _subset_rows(f"photos<={t}", fg[~fg.base_id.isin(dirty)])
+    return pd.DataFrame(rows)
+
+
+def leakage_by_overlap(d: pd.DataFrame) -> pd.DataFrame:
+    """Leakage by spatial relation, replacing the slot-indexed matrix.
+
+    Non-target rows binned by how much of their box the damage reached, against
+    the target's own response. A judge that localises shows movement in the
+    damaged bins and none in the `0` bin; a global judge moves every bin alike.
+    """
+    fg = d[d.scored_region_id != BG]
+    rows = []
+    for judge, g in fg.groupby("judge"):
+        t = g[g.is_target]
+        rows.append(dict(judge=judge, relation="target", n=len(t),
+                         n_bases=t.base_id.nunique(),
+                         mean_delta=t.delta.mean(),
+                         frac_moved=float((t.delta != 0).mean())))
+        o = g[~g.is_target].dropna(subset=["other_box_damaged"])
+        o = o.assign(bin=pd.cut(o.other_box_damaged, OVERLAP_BINS,
+                                labels=OVERLAP_LABELS))
+        for b, ob in o.groupby("bin", observed=False):
+            rows.append(dict(judge=judge, relation=f"other, box damaged {b}",
+                             n=len(ob), n_bases=ob.base_id.nunique(),
+                             mean_delta=ob.delta.mean() if len(ob) else float("nan"),
+                             frac_moved=(float((ob.delta != 0).mean())
+                                         if len(ob) else float("nan"))))
     return pd.DataFrame(rows)
 
 
@@ -413,29 +600,89 @@ def leakage_matrix(d: pd.DataFrame, judge: str) -> pd.DataFrame:
                          values="delta", aggfunc="mean")
 
 
+def _r2_ci(x, y, photo, n_boot: int = N_BOOT, seed: int = SEED) -> dict:
+    """Squared Pearson r of x on y, with a 95% bootstrap over photographs.
+
+    Computed from per-photo sums, so a bootstrap draw is a sum over resampled
+    photos rather than a re-concatenation of rows.
+    """
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    codes = pd.Categorical(photo).codes
+    k = int(codes.max()) + 1
+
+    def tot(w):
+        return np.bincount(codes, weights=w, minlength=k)
+
+    n = np.bincount(codes, minlength=k).astype(float)
+    sx, sy, sxx, syy, sxy = tot(x), tot(y), tot(x * x), tot(y * y), tot(x * y)
+
+    def r2(idx):
+        N, X, Y = n[idx].sum(-1), sx[idx].sum(-1), sy[idx].sum(-1)
+        cov = sxy[idx].sum(-1) - X * Y / N
+        vx = sxx[idx].sum(-1) - X * X / N
+        vy = syy[idx].sum(-1) - Y * Y / N
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return cov * cov / (vx * vy)
+
+    point = float(r2(np.arange(k)[None, :])[0])
+    lo, hi = _ci(r2(_photo_boot_idx(k, n_boot, seed)))
+    return dict(r2=point, r2_lo=lo, r2_hi=hi, n=len(x), n_photos=k)
+
+
 def redundancy(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """How much per-region variance is just the image-level impression?
+    """LEVEL redundancy: each region's score against the leave-one-out mean of
+    the image's other regions, over every variant.
 
-    Regress each region's score on the mean over that image's OTHER regions.
-    Not on the plain image mean, which includes the region itself: with the ~4
-    regions we score, self-inclusion contributes about a quarter of the
-    predictor and manufactures correlation even out of pure noise. Leave-one-out
-    makes R^2 near 1 mean what it is supposed to mean - the region scores are
-    one global impression copied across regions.
+    Not the redundancy test to quote. Score LEVELS mostly track whether FLUX's
+    edits on that photo worked, which is shared across a photo's regions for a
+    perfectly spatial judge too, so a high value here does not show a copied
+    global impression. Kept, now with a photo interval, for continuity with the
+    numbers already reported; quote redundancy_delta() instead.
 
-    Background is excluded from both sides; it is a different question.
+    Leave-one-out, not the plain image mean: with ~4 regions, self-inclusion
+    contributes about a quarter of the predictor and manufactures correlation.
+    Background is excluded from both sides.
     """
     df = df[df.scored_region_id != BG]
     rows = []
     for judge, g in df.groupby("judge"):
-        a = g.groupby(["variant_id", "scored_region_id"])[col].mean().reset_index()
+        a = (g.groupby(["variant_id", "scored_region_id"])
+              .agg(**{col: (col, "mean"), "base_id": ("base_id", "first")})
+              .reset_index())
         grp = a.groupby("variant_id")[col]
         a["n_reg"] = grp.transform("size")
         a["others"] = (grp.transform("sum") - a[col]) / (a["n_reg"] - 1)
         a = a[a.n_reg > 1].dropna(subset=[col, "others"])
         if len(a) > 2 and a.others.std() > 0 and a[col].std() > 0:
-            r = np.corrcoef(a[col], a.others)[0, 1]
-            rows.append(dict(judge=judge, r2=r ** 2, n=len(a)))
+            rows.append(dict(judge=judge, version="level",
+                             **_r2_ci(a[col], a.others, a.base_id)))
+    return pd.DataFrame(rows)
+
+
+def redundancy_delta(d: pd.DataFrame) -> pd.DataFrame:
+    """DELTA redundancy on untouched regions: the redundancy test to quote.
+
+    Takes the delta table (corrupted minus clean, per region) and keeps only
+    regions that were NOT damaged, whose true change is zero by design. Each
+    one's delta is regressed on the leave-one-out mean delta of the variant's
+    OTHER untouched regions.
+
+    A judge scoring each region on its own content gives untouched regions
+    nothing but independent noise: R^2 near 0. A judge whose per-region numbers
+    are one image-level impression moves them together when ANY region is
+    damaged: R^2 high. Unlike the level version, a perfect judge cannot score
+    high here. Needs >= 2 untouched scored regions per variant.
+    """
+    u = d[(d.scored_region_id != BG) & ~d.is_target]
+    rows = []
+    for judge, g in u.groupby("judge"):
+        grp = g.groupby("variant_id").delta
+        n_unt = grp.transform("size")
+        g = g.assign(others=(grp.transform("sum") - g.delta) / (n_unt - 1))
+        g = g[n_unt > 1].dropna(subset=["delta", "others"])
+        if len(g) > 2 and g.others.std() > 0 and g.delta.std() > 0:
+            rows.append(dict(judge=judge, version="delta_untouched",
+                             **_r2_ci(g.delta, g.others, g.base_id)))
     return pd.DataFrame(rows)
 
 
@@ -477,6 +724,15 @@ def main():
     ap.add_argument("--min-edge-iou", type=float, default=0.4,
                     help="edge-IoU cut for the --drift-csv robustness split "
                          "(default 0.4)")
+    ap.add_argument("--overlap-csv", default=None,
+                    help="overlap.csv from scripts/region_overlap.py. With it, "
+                         "the headline numbers are reported on all pairs and "
+                         "on pairs/photos where the damage stayed out of the "
+                         "other region's box (see --max-overlap), plus leakage "
+                         "binned by that overlap.")
+    ap.add_argument("--max-overlap", type=float, nargs="+", default=[0.0, 0.1],
+                    help="other_box_damaged thresholds for the overlap split "
+                         "(default 0 and 0.1)")
     ap.add_argument("--all-readouts", action="store_true",
                     help="run localization for every readout in READOUTS - the "
                          "success/preserve split is the diagnostic for a judge "
@@ -536,15 +792,14 @@ def main():
     if len(coh):
         print(coh.round(3).to_string(index=False))
         coh.to_csv(out / "coherence.csv", index=False)
+        print("  Baseline is mixed_null (permutation within photo x condition),")
+        print("  NOT mixed_if_independent (one pooled rate; kept for tracing).")
         for r in coh.itertuples():
-            if r.frac_mixed < 0.6 * r.mixed_if_independent:
-                print(f"\n  {r.judge}: only {r.frac_mixed:.0%} of variants show "
-                      f"SOME regions moving")
-                print(f"  while others hold, against {r.mixed_if_independent:.0%} "
-                      f"expected if regions moved")
-                print("  independently. The judge is revising its whole answer "
-                      "for an image, not")
-                print("  the score of the region we damaged.")
+            if r.gap_hi < 0:
+                print(f"\n  {r.judge}: {r.frac_mixed:.0%} of variants mixed "
+                      f"against {r.mixed_null:.0%} if regions moved")
+                print(f"  independently (gap {r.gap:+.3f} [{r.gap_lo:+.3f}, "
+                      f"{r.gap_hi:+.3f}], photo bootstrap): regions co-move.")
     else:
         print("  n/a")
 
@@ -553,10 +808,12 @@ def main():
           f"1 and 3 differ by 0.5 of 35 8-bit")
     print(f"   levels - so it reports as one '{BINARY}' row rather than "
           f"flattening 1 and 3.)")
+    deltas = {}
     for c in cols:
         dc = d if c == a.col else delta_table(usable(df, c), c)
         if a.min_control is not None and c != a.col:
             dc = drop_floored(dc, a.min_control)
+        deltas[c] = dc
         loc = localization(dc)
         if len(loc):
             loc.insert(0, "readout", c)
@@ -576,7 +833,18 @@ def main():
         print(lm.round(3).to_string())
         lm.to_csv(out / f"leakage_{judge.replace('/', '_')}.csv")
 
-    print("\n=== redundancy (R^2 vs leave-one-out mean of other regions) ===")
+    print("\n=== redundancy on DELTAS of untouched regions (quote this) ===")
+    for c in cols:
+        red = redundancy_delta(deltas[c])
+        if len(red):
+            red.insert(0, "readout", c)
+            print(red.round(4).to_string(index=False))
+        else:
+            print(f"  {c}: n/a")
+        red.to_csv(out / f"redundancy_delta_{c}.csv", index=False)
+
+    print("\n=== redundancy on score LEVELS (legacy; a perfect judge scores "
+          "high too) ===")
     for c in cols:
         red = redundancy(usable(df, c), c)
         if len(red):
@@ -599,6 +867,24 @@ def main():
         print("  means the masks need a per-region check against an "
               "independent detector -")
         print("  never against the judge under audit.")
+
+    if a.overlap_csv:
+        print(f"\n=== robustness: damage kept out of other regions' boxes "
+              f"(thresholds {a.max_overlap}) ===")
+        dov = attach_overlap(d, a.overlap_csv)
+        os_ = overlap_split(dov, a.max_overlap)
+        print(os_.round(4).to_string(index=False))
+        os_.to_csv(out / "overlap_split.csv", index=False)
+        for t in a.max_overlap:
+            fg = dov[dov.scored_region_id != BG]
+            clean = fg[fg.is_target | (fg.other_box_damaged <= t)]
+            lo = localization(clean)
+            lo.insert(0, "subset", f"pairs<={t}")
+            lo.to_csv(out / f"localization_clean{t}_{a.col}.csv", index=False)
+        lb = leakage_by_overlap(dov)
+        print("\n--- leakage by spatial relation ---")
+        print(lb.round(4).to_string(index=False))
+        lb.to_csv(out / "leakage_by_overlap.csv", index=False)
 
     # The headline sanity check: is the target-region effect even above noise?
     floor = nf.set_index("judge")["median"].to_dict() if len(nf) else {}

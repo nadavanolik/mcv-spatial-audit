@@ -1,0 +1,2 @@
+476 variants (476 controls) -> out/manifest_nuisance150.parquet
+manifest sha256[:16] = 8f5c7b61541fda69   <- all VMs must report this value

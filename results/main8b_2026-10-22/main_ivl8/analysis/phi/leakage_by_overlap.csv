@@ -1,0 +1,7 @@
+judge,relation,n,n_bases,mean_delta,frac_moved
+OpenGVLab/InternVL3-8B,target,3410,136,-1.6193548387096774,0.3073313782991202
+OpenGVLab/InternVL3-8B,"other, box damaged 0",3508,110,-0.8148517673888256,0.28278221208665905
+OpenGVLab/InternVL3-8B,"other, box damaged (0,0.01]",761,92,-0.4177617170389838,0.22864651773981604
+OpenGVLab/InternVL3-8B,"other, box damaged (0.01,0.1]",2039,110,-0.2976949485041687,0.21971554683668465
+OpenGVLab/InternVL3-8B,"other, box damaged (0.1,0.5]",1132,90,-1.0798733804475855,0.3392226148409894
+OpenGVLab/InternVL3-8B,"other, box damaged >0.5",160,30,-3.4822916666666672,0.4875

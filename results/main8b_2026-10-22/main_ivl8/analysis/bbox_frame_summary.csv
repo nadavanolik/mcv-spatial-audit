@@ -1,0 +1,3 @@
+judge,sent_frame,subset,n,n_photos,iou_norm,iou_pixel,norm_wins,located,copy,echo_over_width
+OpenGVLab/InternVL3-8B,norm1000,all,16940,150,1.0,0.04525799605757244,1.0,1.0,1.0,0.9207792207792208
+OpenGVLab/InternVL3-8B,norm1000,separable,16940,150,1.0,0.04525799605757244,1.0,1.0,1.0,0.9207792207792208

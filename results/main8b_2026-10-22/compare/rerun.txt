@@ -1,0 +1,26 @@
+loaded 22176 rows from 5 shards, judges=['Qwen/Qwen3-VL-8B-Instruct']
+parse rate: 100.0%
+loaded 22176 rows from 5 shards, judges=['Qwen/Qwen3-VL-8B-Instruct']
+parse rate: 99.6%
+
+=== paired scores, same (variant, region) in both runs ===
+readout      part         a          b     n  identical  mean_abs_diff  mean_diff  pearson
+ reward  controls committed rerun  1535     0.9062         0.0237    -0.0009   0.9599
+ reward corrupted committed rerun 15331     0.8855         0.0307     0.0011   0.9435
+    phi  controls committed rerun  1535     0.9550         0.6189    -0.0065   0.9591
+    phi corrupted committed rerun 15331     0.9374         0.8103     0.0211   0.9456
+  [reward] using 22171/22176 rows (5 missing this readout)
+  --min-control 0.0: kept 12635/20155 rows (62.7%)
+  [reward] using 22092/22176 rows (84 missing this readout)
+  --min-control 0.0: kept 12780/20082 rows (63.6%)
+  [phi] using 22171/22176 rows (5 missing this readout)
+  --min-control 0.0: kept 12635/20155 rows (62.7%)
+  [phi] using 22092/22176 rows (84 missing this readout)
+  --min-control 0.0: kept 12780/20082 rows (63.6%)
+
+=== stage-4 headline per run (min-control 0.0) ===
+       run readout  n_rows  n_bases  auroc  target_unchanged  other_unchanged  mean_delta_target  mean_delta_other  frac_mixed  mixed_null     gap  gap_lo  gap_hi  r2_delta  r2_delta_lo  r2_delta_hi  auroc_diff  auroc_diff_lo  auroc_diff_hi  n_shared_photos
+ committed  reward    9046      105 0.5227            0.4375           0.4588            -0.0803           -0.0610      0.1458      0.3116 -0.1658 -0.1947 -0.1383    0.3870       0.2462       0.5216         NaN            NaN            NaN              NaN
+rerun  reward    9200      107 0.5227            0.4260           0.4460            -0.0742           -0.0540      0.1122      0.2752 -0.1630 -0.1896 -0.1348    0.3775       0.2490       0.4833      0.0000        -0.0043         0.0093            104.0
+ committed     phi    9046      105 0.5207            0.7496           0.7906            -1.8331           -1.1870      0.2776      0.3380 -0.0605 -0.0763 -0.0455    0.2770       0.1534       0.3846         NaN            NaN            NaN              NaN
+rerun     phi    9200      107 0.5190            0.7420           0.7736            -1.6944           -1.0418      0.2635      0.3181 -0.0546 -0.0708 -0.0387    0.2774       0.1637       0.3754     -0.0017        -0.0060         0.0083            104.0

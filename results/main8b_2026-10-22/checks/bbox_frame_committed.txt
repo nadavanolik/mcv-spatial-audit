@@ -1,0 +1,10 @@
+=== echoed boxes vs the true region, read in each frame ===
+                    judge sent_frame    subset     n  n_photos  iou_norm  iou_pixel  norm_wins  located  copy  echo_over_width
+Qwen/Qwen3-VL-8B-Instruct      pixel       all 16936       150     0.298      0.685      0.308    0.288 0.677            0.417
+Qwen/Qwen3-VL-8B-Instruct      pixel separable 16936       150     0.298      0.685      0.308    0.288 0.677            0.417
+
+--- reading this ---
+  iou_norm high: the judge places the region where it is.
+  iou_pixel high with sent_frame=pixel: it took our pixel numbers as
+  0-1000 coordinates, so it scored a box shrunk toward the top-left.
+  Read the `separable` rows; on the rest the two readings coincide.

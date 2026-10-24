@@ -1,0 +1,11 @@
+judge,corruption,severity,sc_success,sc_preserve,phi,reward
+OpenGVLab/InternVL3-8B,blur,1,13.088,18.336,13.088,0.489
+OpenGVLab/InternVL3-8B,blur,3,11.216,16.918,11.193,0.422
+OpenGVLab/InternVL3-8B,jpeg,1,13.513,18.815,13.5,0.502
+OpenGVLab/InternVL3-8B,jpeg,3,12.569,18.032,12.563,0.464
+OpenGVLab/InternVL3-8B,noise,1,13.578,18.599,13.553,0.503
+OpenGVLab/InternVL3-8B,noise,3,12.956,18.363,12.943,0.474
+OpenGVLab/InternVL3-8B,none,0,13.622,18.826,13.599,0.506
+OpenGVLab/InternVL3-8B,remove,binary,11.132,16.706,11.119,0.418
+OpenGVLab/InternVL3-8B,saturate,1,13.464,18.649,13.452,0.5
+OpenGVLab/InternVL3-8B,saturate,3,13.45,18.542,13.433,0.499

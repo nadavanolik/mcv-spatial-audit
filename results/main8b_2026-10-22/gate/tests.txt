@@ -1,0 +1,424 @@
+PASS test_repeatable
+PASS test_seed_sensitive
+PASS test_order_independent
+PASS test_localized
+PASS test_area_bins_shrink
+
+all determinism guarantees hold
+PASS test_shuffle_is_a_permutation
+PASS test_shuffle_is_deterministic
+PASS test_shuffle_varies_across_variants
+PASS test_subset_keeps_the_target_and_drops_one
+PASS test_subset_handles_a_single_region_base
+PASS test_subset_accepts_a_string_target
+PASS test_baseline_is_the_identity
+PASS test_schema_slots_follow_the_presented_order
+PASS test_enhance_is_deterministic_and_changes_pixels
+PASS test_enhance_is_global
+PASS test_enhance_region_is_local
+PASS test_draw_boxes_marks_only_the_presented_regions
+PASS test_reward_rises_with_pq_at_fixed_phi
+PASS test_build_requests_under_every_presentation
+PASS test_bbox_frame_pixel_is_unchanged_and_norm1000_scales
+PASS test_region_overlap_measures_damage_in_other_boxes
+PASS test_report_clears_a_nuisance_immune_judge
+PASS test_report_catches_a_nuisance_sensitive_judge
+PASS test_report_catches_the_aes_exploit
+PASS test_report_splits_a_local_flatterer_on_failed_edits
+PASS test_reversion_unmasks_a_constant_judge
+PASS test_boot_ci_resamples_photographs_not_regions
+PASS test_rerun_floor_pairs_identical_controls_only
+PASS test_ratio_ci_is_a_ratio_of_photo_means
+PASS test_identity_null_splits_on_slot_order
+PASS test_report_writes_the_exploit_figure
+PASS test_agreement_scores_a_cloned_judge_as_perfect
+
+ALL PASS
+====================================================================
+1. CATEGORY NAMES all exist in COCO's 80
+====================================================================
+  PASS  RECOLORABLE (18 entries) all real COCO names
+  PASS  PERSONLIKE (1 entries) all real COCO names
+  PASS  REMOVABLE (10 entries) all real COCO names
+  PASS  MATERIALIZABLE (28 entries) all real COCO names
+  PASS  every instructable category yields an instruction
+  PASS  a non-instructable category yields None
+
+====================================================================
+1b. POOL INVARIANTS: the material family moves categories, it does not add or remove any
+====================================================================
+  PASS  MATERIALIZABLE subset of RECOLORABLE | REMOVABLE
+  PASS  INSTRUCTABLE unchanged by the material family
+  PASS  every REMOVABLE category is also MATERIALIZABLE
+  PASS  a removable category over the cap still yields an instruction
+  PASS  and that instruction is never a removal
+  PASS  beard and moustache are in the person-attribute family
+  PASS  all 4 attribute templates get drawn  (['add a beard to the person', 'add a moustache to the person', 'add sunglasses to the person', 'make the person look older'])
+
+====================================================================
+2. SELECTION honours the area band, distinctness and count window
+====================================================================
+  PASS  selected exactly the qualifying images  (got [1, 3, 8, 10])
+  PASS  image 3 dropped the 0.1%-area region
+  PASS  image 7 rejected for having too many regions
+  PASS  image 6 rejected: only 2 instructable categories
+
+====================================================================
+2b. UNIQUENESS: a region's category appears exactly once in the image
+====================================================================
+  PASS  image 5 rejected: a second in-band car makes 'the car' ambiguous
+  PASS  image 8 kept: the second car is below duplicate_area_frac  (['car', 'bottle', 'chair'])
+  PASS  image 9 rejected: a CROWD of cars counts as a duplicate
+  PASS  image 10 kept, and the crowd annotation is not itself a region
+  PASS  duplicate_categories flags the doubled category
+  PASS  an invisible duplicate is not flagged  (set())
+  PASS  a crowd annotation is counted
+  PASS  a lone category is never flagged
+  PASS  the floor is configurable
+
+====================================================================
+3. INSTRUCTIONS are drawn once and match their region, in order
+====================================================================
+  PASS  img 1: 'make the car yellow' names 'car'
+  PASS  img 1: 'erase the bottle' names 'bottle'
+  PASS  img 1: 'change the chair to purple' names 'chair'
+  PASS  img 3: 'erase the bottle' names 'bottle'
+  PASS  img 3: 'make the chair green' names 'chair'
+  PASS  img 3: 'make the cup look like it is made of leather' names 'cup'
+  PASS  img 8: 'change the car to wood' names 'car'
+  PASS  img 8: 'remove the bottle' names 'bottle'
+  PASS  img 8: 'change the chair to metal' names 'chair'
+  PASS  img 10: 'change the car to wood' names 'car'
+  PASS  img 10: 'erase the bottle' names 'bottle'
+  PASS  img 10: 'change the chair to glass' names 'chair'
+  PASS  img 1: 'make the car yellow' is exactly one family  (['color'])
+  PASS  img 1: 'erase the bottle' is exactly one family  (['remove'])
+  PASS  img 1: 'change the chair to purple' is exactly one family  (['color'])
+  PASS  img 1: colours are distinct (['yellow', 'purple'])
+  PASS  img 1: materials are distinct ([])
+  PASS  img 3: 'erase the bottle' is exactly one family  (['remove'])
+  PASS  img 3: 'make the chair green' is exactly one family  (['color'])
+  PASS  img 3: 'make the cup look like it is made of leather' is exactly one family  (['material'])
+  PASS  img 3: colours are distinct (['green'])
+  PASS  img 3: materials are distinct (['leather'])
+  PASS  img 8: 'change the car to wood' is exactly one family  (['material'])
+  PASS  img 8: 'remove the bottle' is exactly one family  (['remove'])
+  PASS  img 8: 'change the chair to metal' is exactly one family  (['material'])
+  PASS  img 8: colours are distinct ([])
+  PASS  img 8: materials are distinct (['wood', 'metal'])
+  PASS  img 10: 'change the car to wood' is exactly one family  (['material'])
+  PASS  img 10: 'erase the bottle' is exactly one family  (['remove'])
+  PASS  img 10: 'change the chair to glass' is exactly one family  (['material'])
+  PASS  img 10: colours are distinct ([])
+  PASS  img 10: materials are distinct (['wood', 'glass'])
+  PASS  seed 0: 5 regions, 5 values, none repeated (['yellow'] + ['leather', 'glass', 'wood', 'metal'])
+  PASS  seed 1: 5 regions, 5 values, none repeated (['blue', 'red'] + ['wood', 'leather', 'glass'])
+  PASS  seed 2: 5 regions, 5 values, none repeated (['red', 'green', 'purple'] + ['metal', 'glass'])
+  PASS  seed 3: 5 regions, 5 values, none repeated (['yellow', 'blue', 'purple'] + ['leather', 'marble'])
+  PASS  seed 4: 5 regions, 5 values, none repeated (['red', 'yellow'] + ['wood', 'metal', 'leather'])
+  PASS  seed 5: 5 regions, 5 values, none repeated (['green', 'blue', 'red', 'yellow'] + ['metal'])
+  PASS  seed 6: 5 regions, 5 values, none repeated (['red', 'blue', 'purple'] + ['leather', 'wood'])
+  PASS  seed 7: 5 regions, 5 values, none repeated (['red'] + ['metal', 'wood', 'marble', 'glass'])
+  PASS  seed 8: 5 regions, 5 values, none repeated ([] + ['marble', 'wood', 'leather', 'metal', 'glass'])
+  PASS  seed 9: 5 regions, 5 values, none repeated (['purple', 'blue'] + ['glass', 'wood', 'leather'])
+  PASS  seed 10: 5 regions, 5 values, none repeated (['yellow', 'blue', 'green'] + ['marble', 'glass'])
+  PASS  seed 11: 5 regions, 5 values, none repeated (['yellow'] + ['leather', 'metal', 'glass', 'wood'])
+  PASS  seed 12: 5 regions, 5 values, none repeated (['purple', 'blue'] + ['leather', 'wood', 'marble'])
+  PASS  seed 13: 5 regions, 5 values, none repeated (['blue', 'green'] + ['metal', 'glass', 'wood'])
+  PASS  seed 14: 5 regions, 5 values, none repeated (['yellow', 'red'] + ['leather', 'glass', 'metal'])
+  PASS  seed 15: 5 regions, 5 values, none repeated (['red', 'yellow'] + ['metal', 'glass', 'marble'])
+  PASS  seed 16: 5 regions, 5 values, none repeated ([] + ['marble', 'leather', 'glass', 'wood', 'metal'])
+  PASS  seed 17: 5 regions, 5 values, none repeated (['green'] + ['leather', 'wood', 'marble', 'glass'])
+  PASS  seed 18: 5 regions, 5 values, none repeated (['blue', 'red'] + ['marble', 'leather', 'metal'])
+  PASS  seed 19: 5 regions, 5 values, none repeated (['purple', 'yellow', 'blue', 'red'] + ['glass'])
+  PASS  both colour and material get drawn for the same categories  ({'color', 'material'})
+  PASS  one photograph gets a mix of colour and material
+
+====================================================================
+3b. REMOVAL CAP: at most one removal instruction per base
+====================================================================
+  PASS  MAX_REMOVALS_PER_BASE is 1
+  PASS  seed 0 img 21: 1 removal(s)  (['erase the bottle', 'make the cup look like it is made of marble', 'change the bowl to glass'])
+  PASS  seed 0 img 21: every region still instructed
+  PASS  seed 0 img 22: 1 removal(s)  (['erase the book', 'change the clock to glass', 'make the potted plant look like it is made of marble', 'make the car green'])
+  PASS  seed 0 img 22: every region still instructed
+  PASS  seed 1 img 21: 1 removal(s)  (['remove the bottle', 'make the cup look like it is made of leather', 'make the bowl look like it is made of glass'])
+  PASS  seed 1 img 21: every region still instructed
+  PASS  seed 1 img 22: 1 removal(s)  (['erase the book', 'change the clock to marble', 'make the potted plant look like it is made of leather', 'change the car to wood'])
+  PASS  seed 1 img 22: every region still instructed
+  PASS  seed 2 img 21: 1 removal(s)  (['remove the bottle', 'make the cup look like it is made of wood', 'make the bowl look like it is made of marble'])
+  PASS  seed 2 img 21: every region still instructed
+  PASS  seed 2 img 22: 1 removal(s)  (['erase the book', 'make the clock look like it is made of glass', 'make the potted plant look like it is made of wood', 'change the car to yellow'])
+  PASS  seed 2 img 22: every region still instructed
+  PASS  seed 3 img 21: 1 removal(s)  (['remove the bottle', 'make the cup look like it is made of leather', 'change the bowl to glass'])
+  PASS  seed 3 img 21: every region still instructed
+  PASS  seed 3 img 22: 1 removal(s)  (['remove the book', 'make the clock look like it is made of leather', 'change the potted plant to marble', 'change the car to blue'])
+  PASS  seed 3 img 22: every region still instructed
+  PASS  seed 4 img 21: 1 removal(s)  (['remove the bottle', 'make the cup look like it is made of glass', 'change the bowl to leather'])
+  PASS  seed 4 img 21: every region still instructed
+  PASS  seed 4 img 22: 1 removal(s)  (['remove the book', 'make the clock look like it is made of wood', 'change the potted plant to metal', 'make the car green'])
+  PASS  seed 4 img 22: every region still instructed
+  PASS  seed 5 img 21: 1 removal(s)  (['erase the bottle', 'make the cup look like it is made of glass', 'make the bowl look like it is made of leather'])
+  PASS  seed 5 img 21: every region still instructed
+  PASS  seed 5 img 22: 1 removal(s)  (['remove the book', 'make the clock look like it is made of metal', 'change the potted plant to marble', 'make the car yellow'])
+  PASS  seed 5 img 22: every region still instructed
+  PASS  seed 6 img 21: 1 removal(s)  (['remove the bottle', 'change the cup to marble', 'make the bowl look like it is made of wood'])
+  PASS  seed 6 img 21: every region still instructed
+  PASS  seed 6 img 22: 1 removal(s)  (['remove the book', 'change the clock to leather', 'change the potted plant to glass', 'change the car to green'])
+  PASS  seed 6 img 22: every region still instructed
+  PASS  seed 7 img 21: 1 removal(s)  (['erase the bottle', 'change the cup to metal', 'make the bowl look like it is made of wood'])
+  PASS  seed 7 img 21: every region still instructed
+  PASS  seed 7 img 22: 1 removal(s)  (['remove the book', 'make the clock look like it is made of glass', 'make the potted plant look like it is made of metal', 'make the car look like it is made of marble'])
+  PASS  seed 7 img 22: every region still instructed
+  PASS  seed 8 img 21: 1 removal(s)  (['remove the bottle', 'change the cup to glass', 'make the bowl look like it is made of metal'])
+  PASS  seed 8 img 21: every region still instructed
+  PASS  seed 8 img 22: 1 removal(s)  (['remove the book', 'make the clock look like it is made of wood', 'make the potted plant look like it is made of glass', 'change the car to metal'])
+  PASS  seed 8 img 22: every region still instructed
+  PASS  seed 9 img 21: 1 removal(s)  (['erase the bottle', 'change the cup to leather', 'make the bowl look like it is made of glass'])
+  PASS  seed 9 img 21: every region still instructed
+  PASS  seed 9 img 22: 1 removal(s)  (['remove the book', 'change the clock to wood', 'make the potted plant look like it is made of leather', 'make the car look like it is made of marble'])
+  PASS  seed 9 img 22: every region still instructed
+  PASS  a base with removable categories still gets one removal  ([1, 1])
+  PASS  image 3's second removable fell back to another family  (['erase the bottle', 'make the chair green', 'make the cup look like it is made of leather'])
+  PASS  selection is deterministic given a seed
+  PASS  a different seed gives different instructions
+
+====================================================================
+4. WRITE_BASE produces what stages 1-3 actually open
+====================================================================
+  PASS  wrote a spec per selected image  (4 vs 4)
+  PASS  source.png exists
+  PASS  regions.json exists
+  PASS  instruction.txt exists
+  PASS  every region's mask file exists
+  PASS  region_ids are 0..n-1 in order
+  PASS  regions.json carries the keys judge_prompt reads
+  PASS  instruction names every region's label
+  PASS  mask resolution == source resolution  ((400, 400) vs (400, 400))
+  PASS  mask is binary 0/255  ([  0 255])
+  PASS  mask is non-empty
+  PASS  bbox (x,y,w,h) contains the mask  (bbox=[10, 10, 126, 126] mask x[10,135] y[10,135])
+
+====================================================================
+5. A MISSING IMAGE FILE is skipped without leaving debris
+====================================================================
+[ WARN:0@0.539] global loadsave.cpp:268 findDecoder imread_('/tmp/mcv_stage0_52wdz8lk/does_not_exist/000000000001.jpg'): can't open/read file: check file path/integrity
+  PASS  returns None
+  PASS  left no half-built base directory
+
+====================================================================
+6. CONFIG: the selection block is read, not hardcoded
+====================================================================
+  PASS  config.yaml selection block is picked up  ({'min_regions': 3, 'max_regions': 5, 'min_area_frac': 0.02, 'max_area_frac': 0.25, 'duplicate_area_frac': 0.01})
+  PASS  a changed config actually changes the criteria  ({'min_regions': 2, 'max_regions': 9, 'min_area_frac': 0.02, 'max_area_frac': 0.25, 'duplicate_area_frac': 0.01})
+  PASS  unset keys keep their defaults
+  PASS  a missing config file falls back to defaults
+  PASS  the widened window really selects more images  (10 vs 4)
+
+====================================================================
+7. SURVEY counts what selection would yield
+====================================================================
+  {'n_images': 10, 'hist': {2: 5, 3: 4, 6: 1}, 'usable': 4}
+  PASS  survey scanned every image
+  PASS  survey's usable count matches select()  (4 vs 4)
+
+====================================================================
+8. IMAGE_URL points at one image, not at the whole split
+====================================================================
+  PASS  coco_url is used when COCO provides it
+  PASS  the fallback derives the split from the annotations filename  (http://images.cocodataset.org/train2017/000000000009.jpg)
+  PASS  and works for val2017 too
+
+====================================================================
+ALL PASS
+====================================================================
+====================================================================
+1. SCHEMA: every column stage 3 emits survives the round trip
+====================================================================
+loaded 25200 rows from 3 shards, judges=['fixture/blind', 'fixture/global', 'fixture/perfect']
+parse rate: 100.0%
+  PASS  all three judges loaded  (['fixture/blind', 'fixture/global', 'fixture/perfect'])
+  PASS  phi derived for foreground and bg
+  PASS  region ids normalised to str
+  PASS  bg phi equals sc_background
+
+====================================================================
+2. NOISE FLOOR is measured, positive, and near the injected jitter
+====================================================================
+          judge   mean  median    max
+  fixture/blind 0.1011  0.0000 0.7424
+ fixture/global 0.3553  0.3484 0.6897
+fixture/perfect 0.3601  0.3511 0.7660
+  PASS  one row per judge
+  PASS  jittered judges have a positive floor  ({'fixture/blind': 0.0, 'fixture/global': 0.3484, 'fixture/perfect': 0.3511})
+  PASS  constant judge has a floor of exactly 0
+  PASS  floor within 3x of injected jitter  (jitter=0.4)
+
+====================================================================
+3. LOCALIZATION recovers each judge's known behaviour
+====================================================================
+          judge severity  auroc   n  n_target  ties  mean_delta_target  mean_delta_other
+  fixture/blind        1 0.5000 360       120   1.0             0.0000            0.0000
+  fixture/blind        3 0.5000 360       120   1.0             0.0000            0.0000
+  fixture/blind   binary 0.5000 360       120   1.0             0.0000            0.0000
+ fixture/global        1 0.5043 360       120   0.0            -3.0019           -3.0085
+ fixture/global        3 0.4725 360       120   0.0           -10.9605          -10.9744
+ fixture/global   binary 0.5006 360       120   0.0            -6.9853           -6.9903
+fixture/perfect        1 1.0000 360       120   0.0            -2.9534            0.0237
+fixture/perfect        3 1.0000 360       120   0.0           -10.9928            0.0105
+fixture/perfect   binary 1.0000 360       120   0.0            -7.0023            0.0051
+  PASS  perfect judge -> AUROC ~ 1.0  ([1.0, 1.0, 1.0])
+  PASS  global judge -> AUROC ~ 0.5 (no spatial information)  ([0.504, 0.472, 0.501])
+  PASS  blind judge produces no usable separation  ([0.5, 0.5, 0.5])
+  PASS  background excluded from AUROC
+  PASS  severity 3 localises at least as well as severity 1
+
+====================================================================
+4. LEAKAGE MATRIX: diagonal for `perfect`, uniform for `global`
+====================================================================
+perfect:
+scored_region_id      0      1      2     bg
+target_region_id                            
+0                -6.994 -0.001  0.039  0.017
+1                -0.010 -7.007  0.030  0.038
+2                 0.015  0.004 -6.947  0.057
+global:
+scored_region_id      0      1      2     bg
+target_region_id                            
+0                -6.980 -7.042 -6.943 -0.034
+1                -6.997 -7.014 -6.962 -0.022
+2                -6.973 -7.030 -6.954 -0.032
+  PASS  perfect: diagonal far below off-diagonal  (diag=-6.98 off=0.01)
+  PASS  global: diagonal indistinguishable from off-diagonal  (diag=-6.98 off=-6.99)
+
+====================================================================
+5. REDUNDANCY separates a real per-region score from a copied one
+====================================================================
+          judge version     r2  r2_lo  r2_hi    n  n_photos
+ fixture/global   level 0.9976 0.9973 0.9978 1260        20
+fixture/perfect   level 0.2068 0.2028 0.2112 1260        20
+  PASS  global judge: R^2 high (region score is the image score)  (R^2=0.998)
+  PASS  perfect judge: R^2 lower than global  (0.207 < 0.998)
+
+====================================================================
+6. AXIS TABLE shows preserve moving while success holds
+====================================================================
+          judge corruption severity  sc_success  sc_preserve    phi  reward
+fixture/perfect       blur        1      21.970       19.030 19.030   0.780
+fixture/perfect       blur        3      21.987       10.993 10.993   0.592
+fixture/perfect      noise        1      21.988       19.030 19.030   0.780
+fixture/perfect      noise        3      22.016       10.988 10.988   0.592
+fixture/perfect       none        0      22.000       22.965 21.986   0.839
+fixture/perfect     remove   binary      22.013       14.981 14.981   0.686
+  PASS  preserve falls with severity
+  PASS  success does NOT fall with severity
+
+====================================================================
+6b. FLAT-SEVERITY corruptions collapse to one condition
+====================================================================
+  PASS  remove reports as one binary condition  (['binary'])
+  PASS  graded corruptions keep their ladder  (['1', '3'])
+  PASS  no severity row is dropped by the collapse
+  PASS  remove still gets its own by-corruption row
+  PASS  the binary row is separate, not merged into 1 or 3  (['1', '3', 'binary'])
+
+====================================================================
+7. BY-CORRUPTION split runs and covers every corruption
+====================================================================
+          judge corruption  auroc   n  mean_delta_target  mean_delta_other
+  fixture/blind       blur 0.5000 360             0.0000            0.0000
+  fixture/blind      noise 0.5000 360             0.0000            0.0000
+  fixture/blind     remove 0.5000 360             0.0000            0.0000
+ fixture/global       blur 0.4991 360            -6.9817           -6.9818
+ fixture/global      noise 0.4898 360            -6.9807           -7.0010
+ fixture/global     remove 0.5006 360            -6.9853           -6.9903
+fixture/perfect       blur 1.0000 360            -6.9719            0.0081
+fixture/perfect      noise 1.0000 360            -6.9743            0.0261
+fixture/perfect     remove 1.0000 360            -7.0023            0.0051
+  PASS  all corruptions present
+
+====================================================================
+8. MISSING READOUTS are dropped per-column, not globally
+====================================================================
+  [reward] using 18900/25200 rows (6300 missing this readout)
+  PASS  reward loses rows
+  PASS  phi keeps all of them
+
+====================================================================
+8b. FLOOR FILTER drops only regions whose CLEAN control is at the floor
+====================================================================
+  --min-control 0.0: kept 4280/4320 rows (99.1%)
+  PASS  dropped exactly the floored rows  (4280 of 4320)
+  PASS  every surviving row is above the threshold
+  --min-control -1.0: kept 4320/4320 rows (100.0%)
+  PASS  a threshold below the minimum keeps everything
+  PASS  the filter does not add or reorder columns
+
+====================================================================
+9. THE CLI RUNS END TO END and writes every artefact
+====================================================================
+  PASS  exit code 0
+  PASS  wrote noise_floor.csv
+  PASS  wrote axis_by_severity.csv
+  PASS  wrote deltas.parquet
+  PASS  wrote localization_reward.csv
+  PASS  wrote localization_phi.csv
+  PASS  wrote redundancy_reward.csv
+  PASS  stdout is ASCII (the Windows console is not UTF-8)
+
+====================================================================
+10. DRIFT ROBUSTNESS SPLIT
+====================================================================
+  PASS  two rows: all, and the surviving subset
+  PASS  the subset keeps exactly the high-IoU bases  ([20, 10])
+  PASS  a global judge stays at AUROC ~0.5 on both subsets  ([0.497, 0.496])
+  PASS  a threshold below every score keeps every base
+  PASS  --drift-csv runs end to end
+  PASS  wrote drift_robustness.csv
+
+====================================================================
+11. COHERENCE: the permutation null is not fooled by uneven move rates
+====================================================================
+  independent: mixed 0.128 null 0.129 pooled-formula 0.750
+  whole-image: mixed 0.000 null 0.096
+  PASS  independent judge: observed ~ permutation null  (gap -0.001 [-0.008, +0.005])
+  PASS  independent judge: the pooled formula would call it coupled  (0.750 vs 0.128)
+  PASS  whole-image judge: observed far below the null  (gap -0.096 [-0.141, -0.057])
+  PASS  same seed, same numbers
+
+====================================================================
+12. REDUNDANCY ON DELTAS: a perfect judge scores low, a global one high
+====================================================================
+  perfect R^2 0.000 [0.000, 0.013]   global R^2 0.940 [0.926, 0.951]
+  PASS  perfect judge: untouched deltas are uncorrelated
+  PASS  global judge: untouched deltas move together
+  PASS  interval brackets the point estimate
+  PASS  photographs, not rows, are the sample
+
+====================================================================
+13. OVERLAP SPLIT: a judge that only reacts to damage in a box
+====================================================================
+             n_bases  n_rows  auroc  other_unchanged
+subset                                              
+all               60    1080  0.878            0.757
+pairs<=0.0        60     905  1.000            1.000
+photos<=0.0       30     540  1.000            1.000
+  PASS  all pairs: overlap looks like leakage
+  PASS  clean pairs: perfect localisation
+  PASS  photo-level cut keeps only photos with no overlap
+  PASS  leakage by relation: untouched boxes never move
+
+====================================================================
+ALL PASS
+====================================================================
+=== parsing 28 files ===
+  PASS all files parse
+
+=== importing 8 CPU-only modules ===
+  PASS all CPU modules import
+
+=== GPU modules import without torch/vllm ===
+  PASS src.stage1_edit
+  PASS src.stage3_judge
+
+ALL PASS

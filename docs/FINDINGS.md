@@ -18,8 +18,10 @@ the paper never publishes it, so every `reward` number and the whole AES analysi
 inherit that reconstruction. `phi` uses only the verbatim prompt and is the safer
 primary readout.
 
-A second family was attempted and **does not currently support a cross-family
-claim** — see the retraction banner in the 2026-09-26 entry.
+A second family **now supports the cross-family claim**: InternVL3-8B passes the
+perception control and fails localization the same way (2026-10-22 entry
+below). The InternVL3-2B retraction in the 2026-09-26 entry still stands for the
+2B; it is superseded, not reversed.
 
 **The scale is effectively binary.** On the `main` run's 16,936 scored regions:
 
@@ -39,6 +41,62 @@ smallest real step is ~0.3, an R^2 on a variable with two atoms. It also
 vindicates invariant 6 — on a scale that is 86% two-valued, a continuous logprob
 readout would have manufactured a result. Report the reward as 2-level in
 practice, not 26-level.
+
+---
+
+## 8B JUDGES, 0-1000 BOXES, 2026-10-22 — the numbers in the report
+
+Everything in `paper/main.tex` comes from `results/main8b_2026-10-22/`; the
+file for each number is in `results/README.md`. Two changes from the earlier
+runs: the second judge is **InternVL3-8B** (the 2B failed perception), and boxes
+are given in the **0-1000 frame** both models are trained on
+(`--bbox-frame norm1000`), not in pixels. A Qwen pixel-box re-run of the
+committed protocol separates the two changes.
+
+**Measurement.** Every main-run request parses (the pixel re-run 99.6%).
+Identical clean-control requests leave `phi` unchanged 96.6% (Qwen, mean |delta|
+0.339) and 91.1% (InternVL, 0.499) of the time; damage moves the corrupted
+region's `phi` 4-6x that floor. Qwen's `phi` is 76% exactly 0 or 25.
+
+**Perception passes for both.** Every strong corruption lowers AES with an
+interval below zero. Strong noise: 0.79 between-photo SDs for Qwen, 0.56 for
+InternVL (`pq_response.csv`, `--gate` PASS for both).
+
+**Localization fails for both** (`phi`, floor-excluded; Qwen 131 photos, 11,880
+region scores; InternVL 136, 11,010):
+
+| | AUROC | unchanged, corrupted / untouched | mean delta-phi, corrupted / untouched |
+|---|---|---|---|
+| Qwen, all | 0.523 | 75% / 79% | -1.34 / -0.79 |
+| Qwen, removal | 0.545 | 63% / 71% | -3.00 / -1.67 |
+| InternVL, all | 0.541 | 69% / 73% | -1.62 / -0.73 |
+| InternVL, removal | 0.592 | 55% / 65% | -3.79 / -1.54 |
+
+No corruption reaches 0.6. Localization does not follow perception: strong
+noise is what Qwen perceives most and localizes nearly least (0.521). Holds when
+untouched regions the damage reached are dropped (0.521 / 0.539), on the
+layout-survived photos (0.525 / 0.544), and for Qwen with pixel boxes (0.519 vs
+0.523, difference [-0.009, +0.018]): the box frame is not the cause.
+
+**Coupling.** Mixed variants (only some regions change) are 4.5 points below
+the independence null for Qwen [-5.8, -3.2] and 6.5 for InternVL [-8.6, -4.7].
+R^2 of an untouched region's delta-phi on the other untouched regions': 0.14
+[0.07, 0.23] and 0.19 [0.10, 0.31]. Modest but nonzero, and on `phi`, so not the
+AES factor.
+
+**Nuisance** (`phi`, floor-excluded, ratio of per-photo means, against damage
+averaged over all corruptions and settings): reordering the list 1.60x [1.23,
+2.09] Qwen / 1.80x [1.48, 2.22] InternVL; dropping another region 1.68x /
+1.47x; boxes drawn on the images 0.95x / 1.89x. Identity shuffles move at the
+floor (0.30 vs 3.54 for reordered lists, Qwen). Against removal alone the
+reordering ratio is ~0.9-1.0, so "more than damage" means more than the average
+corruption, not more than removal.
+
+**Exploitability.** With no image both judges fall to a high near-constant
+default (mean reward 0.75 / 0.73 vs 0.64 / 0.55 sighted; SD 0.09 / 0.13), so
+failed edits gain ~+0.45; with failed edits picked by the other judge, +0.27
+[0.21, 0.33] and +0.38 [0.33, 0.44]. Cosmetic enhancement gives no gain,
+globally or inside the target box.
 
 ---
 

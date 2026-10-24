@@ -1,0 +1,2 @@
+presentation,n,failed_below,judge_a,judge_b,failed_a,failed_b,both_failed,only_a,only_b,neither,jaccard,agree
+baseline,1540,20.0,OpenGVLab/InternVL3-8B,Qwen/Qwen3-VL-8B-Instruct,764,587,518,246,69,707,0.6218487394957983,0.7954545454545454

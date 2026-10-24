@@ -177,8 +177,18 @@ scripts/nuisance_report.py    paired-delta analysis across presentations, with
                         bootstrap intervals over photographs  [CPU]
 scripts/judge_agreement.py    do two judges agree on the same image? the only
                         analysis that spans judges  [CPU]
-scripts/make_figures.py       report figures + tie-rate table, drawn from the
-                        committed results/ CSVs only  [CPU]
+scripts/make_figures.py       perception-vs-localization report figure, from one
+                        run's stage-4 outputs (--run)  [CPU]
+scripts/make_examples.py      appendix figures on one photograph: pipeline and
+                        per-region delta-phi heatmap; re-renders the variants
+                        [CPU, needs data/bases]
+scripts/region_overlap.py     how much of each OTHER region's box the damage
+                        reached, from the rendered bytes; feeds stage4's
+                        --overlap-csv split  [CPU]
+scripts/bbox_frame_check.py   which coordinate frame the judge read our boxes
+                        in, from the bbox_2d it echoes  [CPU]
+scripts/compare_runs.py       same judge, two runs (hardware, box frame): paired
+                        scores and stage-4 headline side by side  [CPU]
 
 tests/test_determinism.py   5 determinism properties
 tests/test_stage0.py        selection logic via a stub COCO (no pycocotools)
@@ -200,6 +210,16 @@ docs/internal/TEAM_BRIEF.md   teammate status page
 ```
 
 ## Current state
+
+**The report is drafted** (`paper/main.tex`, 2026-10-24) and every number in it
+comes from **`results/main8b_2026-10-22/`**: Qwen3-VL-8B and **InternVL3-8B** on
+`main` and on the `nuisance150` controls under all seven presentations, boxes in
+the **0-1000 frame** (`--bbox-frame norm1000`), plus a Qwen pixel-box re-run of
+the committed protocol. Number -> file map in `results/README.md`; summary at the
+top of `docs/FINDINGS.md`. InternVL3-8B **passes** the perception gate, so the
+cross-family localization claim is back (AUROC on `phi`, floor-excluded: 0.523
+Qwen, 0.541 InternVL). The paragraphs below describe the earlier A10 runs that
+led there; their numbers point the same way but are not the reported ones.
 
 **Stage 1 is done and the tarball is published** (2026-09-05,
 `mcvgpu2025s-0004`): 150 train2017 bases, 476 regions, edited in 8h53m at
@@ -265,7 +285,7 @@ it biases the parsed subset toward simpler scenes, so quote it.
 `--gpu-util 0.60`): blind default `phi` 20.4, cosmetic axes at zero. It parses
 `noimg` at 100%, so the looping is Qwen's, not a property of image-free prompts.
 
-**The cross-family localization claim is RETRACTED (2026-09-29).** InternVL3-2B
+**The cross-family localization claim was RETRACTED (2026-09-29) for the 2B; restored with InternVL3-8B, see above.** InternVL3-2B
 **fails the perception precondition**: `scripts/pq_response.py` gives it dAES
 **-0.109** on noise s3 against Qwen's **-2.68**, a control AES of 7.17/25 with a
 between-base SD of 0.67, and 63% of its per-region `phi` at exactly 0. A judge
@@ -350,10 +370,9 @@ All five test suites pass on the laptop. Cross-VM determinism is confirmed on
 **Outstanding (none blocks the write-up):**
 
 - Determinism hash from the last VM. Still the only unreported verification.
-- **A second judge family that passes the perception control.** InternVL3-2B
-  does not (see above), so the cross-family localization claim is retracted and
-  this is back to being the top strengthening job. Run `scripts/pq_response.py`
-  on any new judge BEFORE writing up its localization numbers.
+- ~~A second judge family that passes the perception control.~~ **Done:**
+  InternVL3-8B passes (`results/main8b_2026-10-22/`). Keep running
+  `scripts/pq_response.py --gate` on any new judge before its localization numbers.
 - The `score_preserve` overediting question is now partly answered — the main run
   shows the axis moves but does not localise (see
   [`docs/FINDINGS.md`](../docs/FINDINGS.md)). The direct removal-vs-recolour
@@ -378,8 +397,7 @@ paragraph above and [`docs/FINDINGS.md`](../docs/FINDINGS.md).
 4b. ~~Nuisance axes at 150 bases.~~ **Done 2026-10-14** on `0004`, Qwen,
    controls only; InternVL3-2B the same evening. Results in
    `results/nuisance_150_2026-10-14/`.
-5. **Figures and the report.** The tie-rate and coherence tables are the
-   headline, not AUROC. This is the critical path now.
+5. ~~Figures and the report.~~ **Drafted 2026-10-24**, `paper/main.tex`.
 6. Cross-VM determinism hash from the one VM that has not reported it.
 7. Optional: an object-size split of `main` by `area_frac` (laptop only; the
    value is in `bases.json`). Note `area_bin: half/quarter` does NOT test bigger

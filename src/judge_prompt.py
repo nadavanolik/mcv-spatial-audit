@@ -97,16 +97,49 @@ def xywh_to_xyxy(bbox) -> list:
     return [int(x), int(y), int(x + w), int(y + h)]
 
 
-def build_sc_prompt(instruction: str, regions: list) -> str:
+# Which coordinate frame bbox_2d is written in. Stage-3 flag, never a manifest
+# column (invariant 7): it changes the prompt text, not the image bytes.
+#
+#   pixel     source-image pixels. What every run before 2026-10-22 sent.
+#   norm1000  relative, scaled to 0-1000 per axis. Qwen3-VL and InternVL3
+#             ground in this frame -- the echoed boxes on `main` come back in
+#             it (see bbox_2d below) -- so pixel boxes on a 640px-wide image
+#             are read as boxes shrunk toward the top-left corner.
+BBOX_FRAMES = ("pixel", "norm1000")
+
+
+def bbox_in_frame(bbox, frame: str = "pixel", size=None) -> list:
+    """COCO (x, y, w, h) in source pixels -> bbox_2d [x1, y1, x2, y2] in `frame`.
+
+    `size` is the image's (width, height), required for norm1000.
+    """
+    xyxy = xywh_to_xyxy(bbox)
+    if frame == "pixel":
+        return xyxy
+    if frame != "norm1000":
+        raise ValueError(f"frame must be one of {BBOX_FRAMES}, got {frame!r}")
+    if not size:
+        raise ValueError("norm1000 needs the image size (width, height)")
+    w, h = size
+    x, y, bw, bh = bbox
+    return [min(1000, max(0, round(v))) for v in
+            (x / w * 1000, y / h * 1000, (x + bw) / w * 1000, (y + bh) / h * 1000)]
+
+
+def build_sc_prompt(instruction: str, regions: list, frame: str = "pixel",
+                    size=None) -> str:
     """One prompt scoring EVERY region of one image, per A.4.3.
 
     Note this is one request per *variant*, not per region — the protocol hands
     the judge all regions at once and asks it to score them separately. Which
     means cross-region leakage is measurable exactly as the paper's judge would
     exhibit it, rather than as an artefact of how we chose to slice requests.
+
+    `frame`/`size`: see BBOX_FRAMES. The default reproduces the committed runs
+    byte for byte.
     """
     listed = [{"id": r["region_id"], "label": r["label"],
-               "bbox_2d": xywh_to_xyxy(r["bbox"])} for r in regions]
+               "bbox_2d": bbox_in_frame(r["bbox"], frame, size)} for r in regions]
     return SFREWARD_SC_VERBATIM + _SC_SUFFIX.format(
         instruction=instruction,
         regions_json=json.dumps(listed, indent=2),

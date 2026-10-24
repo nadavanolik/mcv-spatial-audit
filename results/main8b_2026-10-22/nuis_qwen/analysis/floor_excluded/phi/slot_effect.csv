@@ -1,0 +1,6 @@
+judge,slot_idx,mean,std,size,within,within_lo,within_hi
+Qwen/Qwen3-VL-8B-Instruct,0,15.998,9.937,476,0.098,-0.229,0.433
+Qwen/Qwen3-VL-8B-Instruct,1,17.143,10.439,476,0.247,-0.051,0.532
+Qwen/Qwen3-VL-8B-Instruct,2,15.977,10.937,476,-0.34,-0.656,-0.008
+Qwen/Qwen3-VL-8B-Instruct,3,13.967,12.01,92,0.066,-1.08,1.061
+Qwen/Qwen3-VL-8B-Instruct,4,15.25,11.973,20,-0.55,-3.0,1.55

@@ -1,0 +1,156 @@
+loaded 22176 rows from 5 shards, judges=['OpenGVLab/InternVL3-2B']
+parse rate: 100.0%
+
+=== score distributions (all rows) ===
+          reward        phi  sc_preserve  sc_success
+count  22176.000  22176.000    16940.000   16940.000
+mean       0.267     12.346        8.935       9.939
+std        0.263     12.301       11.870      11.969
+min        0.000      0.000        0.000       0.000
+25%        0.000      0.000        0.000       0.000
+50%        0.320     10.000        0.000       0.000
+75%        0.529     25.000       25.000      25.000
+max        0.600     25.000       25.000      25.000
+
+=== measurement quality (read this before any result below) ===
+  reward: range 0.000-0.600, 49.3% of values sit on a rail
+  noise floor is undefined (n_samples=1: no within-variant spread to measure).
+  Judge effects against the between-variant SD below, and against the tie rate.
+  between-variant SD of clean controls: 0.257
+
+=== noise floor, reward (SD across repeats, clean controls) ===
+                 judge  mean  median  max
+OpenGVLab/InternVL3-2B   NaN     NaN  NaN
+
+=== targeted region: which axis moves? ===
+                 judge corruption severity  sc_success  sc_preserve   phi  reward
+OpenGVLab/InternVL3-2B       blur        1      10.550        9.643 9.185   0.200
+OpenGVLab/InternVL3-2B       blur        3       9.954        8.947 8.511   0.184
+OpenGVLab/InternVL3-2B       jpeg        1      10.277        9.284 8.834   0.195
+OpenGVLab/InternVL3-2B       jpeg        3      10.433        9.368 8.737   0.192
+OpenGVLab/InternVL3-2B      noise        1      10.328        9.475 9.004   0.197
+OpenGVLab/InternVL3-2B      noise        3      10.468        9.401 8.725   0.191
+OpenGVLab/InternVL3-2B       none        0      10.296        9.769 9.183   0.203
+OpenGVLab/InternVL3-2B     remove   binary       9.935        8.598 8.112   0.178
+OpenGVLab/InternVL3-2B   saturate        1      10.008        9.200 8.670   0.192
+OpenGVLab/InternVL3-2B   saturate        3      10.492        9.874 9.326   0.204
+  --min-control 0.0: kept 11190/20160 rows (55.5%)
+
+=== does the score move at all? (delta == 0 exactly) ===
+                 judge corruption severity  n_target  target_unchanged  target_dropped  target_rose  other_unchanged
+OpenGVLab/InternVL3-2B       blur        1       206             0.587           0.262        0.150            0.565
+OpenGVLab/InternVL3-2B       blur        3       206             0.529           0.335        0.136            0.506
+OpenGVLab/InternVL3-2B       jpeg        1       206             0.568           0.243        0.189            0.561
+OpenGVLab/InternVL3-2B       jpeg        3       206             0.505           0.325        0.170            0.485
+OpenGVLab/InternVL3-2B      noise        1       206             0.587           0.262        0.150            0.574
+OpenGVLab/InternVL3-2B      noise        3       206             0.549           0.330        0.121            0.519
+OpenGVLab/InternVL3-2B     remove   binary       412             0.490           0.359        0.150            0.463
+OpenGVLab/InternVL3-2B   saturate        1       206             0.587           0.286        0.126            0.584
+OpenGVLab/InternVL3-2B   saturate        3       206             0.583           0.262        0.155            0.565
+
+  Up to 59% of DAMAGED regions get a score identical to their clean
+  control. Where the score never moves, no ranking metric below can say
+  anything: AUROC 0.5 there means 'did not react', not 'reacted in the
+  wrong place'. Report the tie rate alongside every AUROC.
+
+=== do a variant's regions move together? ===
+                 judge  n_variants  n_photos  regions_per_variant  per_region_move_rate  frac_none  frac_all  frac_mixed  frac_mixed_lo  frac_mixed_hi  mixed_null  mixed_null_lo  mixed_null_hi    gap  gap_lo  gap_hi  mixed_if_independent
+OpenGVLab/InternVL3-2B        2190        71                  3.0                  0.46      0.495     0.426        0.08          0.024          0.153       0.187          0.178          0.194 -0.107  -0.151  -0.066                 0.745
+  Baseline is mixed_null (permutation within photo x condition),
+  NOT mixed_if_independent (one pooled rate; kept for tracing).
+
+  OpenGVLab/InternVL3-2B: 8% of variants mixed against 19% if regions moved
+  independently (gap -0.107 [-0.151, -0.066], photo bootstrap): regions co-move.
+
+=== localization AUROC by severity ===
+  (remove has no severity ladder - its 1 and 3 differ by 0.5 of 35 8-bit
+   levels - so it reports as one 'binary' row rather than flattening 1 and 3.)
+readout                  judge severity  auroc    n  n_target   ties  mean_delta_target  mean_delta_other
+ reward OpenGVLab/InternVL3-2B        1 0.4994 2572       824 0.5747            -0.0312           -0.0325
+ reward OpenGVLab/InternVL3-2B        3 0.4925 2572       824 0.5260            -0.0392           -0.0417
+ reward OpenGVLab/InternVL3-2B   binary 0.4980 1286       412 0.4720            -0.0660           -0.0676
+  --min-control 0.0: kept 11190/20160 rows (55.5%)
+readout                  judge severity  auroc    n  n_target   ties  mean_delta_target  mean_delta_other
+    phi OpenGVLab/InternVL3-2B        1 0.4996 2572       824 0.7356            -1.2961           -1.3227
+    phi OpenGVLab/InternVL3-2B        3 0.4951 2572       824 0.7201            -1.5546           -1.6773
+    phi OpenGVLab/InternVL3-2B   binary 0.5009 1286       412 0.6765            -2.8665           -2.9279
+  [sc_preserve] using 16940/22176 rows (5236 missing this readout)
+  --min-control 0.0: kept 6460/15400 rows (41.9%)
+    readout                  judge severity  auroc    n  n_target   ties  mean_delta_target  mean_delta_other
+sc_preserve OpenGVLab/InternVL3-2B        1 0.5011 2584       828 0.7914            -1.5833           -1.5524
+sc_preserve OpenGVLab/InternVL3-2B        3 0.4975 2584       828 0.7755            -1.7403           -1.8667
+sc_preserve OpenGVLab/InternVL3-2B   binary 0.4986 1292       414 0.7190            -3.1872           -3.3559
+  [sc_success] using 16940/22176 rows (5236 missing this readout)
+  --min-control 0.0: kept 7160/15400 rows (46.5%)
+   readout                  judge severity  auroc    n  n_target   ties  mean_delta_target  mean_delta_other
+sc_success OpenGVLab/InternVL3-2B        1 0.5005 2864       916 0.7703            -0.5560           -0.5578
+sc_success OpenGVLab/InternVL3-2B        3 0.4976 2864       916 0.7654            -0.5156           -0.5352
+sc_success OpenGVLab/InternVL3-2B   binary 0.5043 1432       458 0.7395            -1.1325           -1.0671
+
+=== localization AUROC by corruption type ===
+                 judge corruption  auroc    n  mean_delta_target  mean_delta_other
+OpenGVLab/InternVL3-2B       blur 0.4890 1286            -0.0442           -0.0504
+OpenGVLab/InternVL3-2B       jpeg 0.5021 1286            -0.0355           -0.0346
+OpenGVLab/InternVL3-2B      noise 0.4990 1286            -0.0322           -0.0306
+OpenGVLab/InternVL3-2B     remove 0.4980 1286            -0.0660           -0.0676
+OpenGVLab/InternVL3-2B   saturate 0.4937 1286            -0.0290           -0.0326
+
+=== leakage matrix (reward): OpenGVLab/InternVL3-2B ===
+scored_region_id      0      1      2      3     bg
+target_region_id                                   
+0                -0.048 -0.060 -0.051 -0.122 -0.003
+1                -0.031 -0.044 -0.029 -0.081 -0.002
+2                -0.031 -0.044 -0.030 -0.040 -0.004
+3                -0.074 -0.073 -0.044 -0.073 -0.004
+4                   NaN    NaN    NaN    NaN -0.004
+
+=== redundancy on DELTAS of untouched regions (quote this) ===
+readout                  judge         version     r2  r2_lo  r2_hi    n  n_photos
+ reward OpenGVLab/InternVL3-2B delta_untouched 0.8734 0.7358 0.9703 3900        71
+readout                  judge         version     r2  r2_lo  r2_hi    n  n_photos
+    phi OpenGVLab/InternVL3-2B delta_untouched 0.8615 0.7264 0.9636 3900        71
+    readout                  judge         version     r2  r2_lo  r2_hi    n  n_photos
+sc_preserve OpenGVLab/InternVL3-2B delta_untouched 0.8773 0.7387 0.9752 3900        71
+   readout                  judge         version     r2  r2_lo  r2_hi    n  n_photos
+sc_success OpenGVLab/InternVL3-2B delta_untouched 0.7974 0.6148 0.9155 4360        79
+
+=== redundancy on score LEVELS (legacy; a perfect judge scores high too) ===
+readout                  judge version     r2  r2_lo  r2_hi     n  n_photos
+ reward OpenGVLab/InternVL3-2B   level 0.7181 0.6186 0.7983 16940       150
+readout                  judge version     r2  r2_lo  r2_hi     n  n_photos
+    phi OpenGVLab/InternVL3-2B   level 0.7055 0.6017 0.7877 16940       150
+  [sc_preserve] using 16940/22176 rows (5236 missing this readout)
+    readout                  judge version     r2  r2_lo  r2_hi     n  n_photos
+sc_preserve OpenGVLab/InternVL3-2B   level 0.7198 0.6198 0.7992 16940       150
+  [sc_success] using 16940/22176 rows (5236 missing this readout)
+   readout                  judge version     r2  r2_lo  r2_hi     n  n_photos
+sc_success OpenGVLab/InternVL3-2B   level 0.7062  0.607 0.7897 16940       150
+
+=== robustness: bases whose layout survived the edit (edge IoU >= 0.4) ===
+       subset                  judge  n_bases  n_rows  target_unchanged  other_unchanged  auroc  frac_mixed  mixed_null     gap  gap_lo  gap_hi  r2_delta  r2_delta_lo  r2_delta_hi  mixed_if_independent
+          all OpenGVLab/InternVL3-2B       76    6430            0.5476           0.5286 0.4964      0.0799      0.1866 -0.1067 -0.1507 -0.0663    0.8734       0.7358       0.9703                0.7453
+edge_iou>=0.4 OpenGVLab/InternVL3-2B       48    4220            0.5358           0.5118 0.4950      0.1014      0.2009 -0.0995 -0.1542 -0.0522    0.8510       0.6500       0.9654                0.7478
+  Agreement across the two rows means the conclusion does not rest on bases
+  where a source-coordinate mask may no longer cover its object. Divergence
+  means the masks need a per-region check against an independent detector -
+  never against the judge under audit.
+
+=== robustness: damage kept out of other regions' boxes (thresholds [0.0, 0.1]) ===
+     subset                  judge  n_bases  n_rows  target_unchanged  other_unchanged  auroc  frac_mixed  mixed_null     gap  gap_lo  gap_hi  r2_delta  r2_delta_lo  r2_delta_hi  mixed_if_independent
+        all OpenGVLab/InternVL3-2B       76    6430            0.5476           0.5286 0.4964      0.0799      0.1866 -0.1067 -0.1507 -0.0663    0.8734       0.7358       0.9703                0.7453
+ pairs<=0.0 OpenGVLab/InternVL3-2B       76    3779            0.5476           0.4852 0.4949      0.0694      0.1357 -0.0663 -0.1035 -0.0341    0.8149       0.4946       0.9992                0.5000
+photos<=0.0 OpenGVLab/InternVL3-2B        8     600            0.3150           0.3225 0.5016      0.1250      0.1662 -0.0412 -0.0895  0.0000    0.4349       0.0001       1.0000                0.4352
+ pairs<=0.1 OpenGVLab/InternVL3-2B       76    5596            0.5476           0.5387 0.4996      0.0804      0.1713 -0.0909 -0.1311 -0.0550    0.8842       0.7222       0.9826                0.7421
+photos<=0.1 OpenGVLab/InternVL3-2B       22    1540            0.5157           0.5146 0.5119      0.0930      0.1439 -0.0509 -0.0954 -0.0148    0.7510       0.2626       1.0000                0.7467
+
+--- leakage by spatial relation ---
+                 judge                      relation    n  n_bases  mean_delta  frac_moved
+OpenGVLab/InternVL3-2B                        target 2060       76     -0.0414      0.4524
+OpenGVLab/InternVL3-2B          other, box damaged 0 1719       58     -0.0531      0.5148
+OpenGVLab/InternVL3-2B   other, box damaged (0,0.01]  511       55     -0.0360      0.3718
+OpenGVLab/InternVL3-2B other, box damaged (0.01,0.1] 1306       65     -0.0311      0.4257
+OpenGVLab/InternVL3-2B  other, box damaged (0.1,0.5]  699       54     -0.0420      0.4921
+OpenGVLab/InternVL3-2B       other, box damaged >0.5  135       17     -0.0666      0.6296
+
+=== effect vs noise floor (reward) ===
+OpenGVLab/InternVL3-2B: |mean delta|=0.0414 vs floor=nan  -> floor undefined (n_samples=1) - judge this by the tie rate and the between-variant SD above

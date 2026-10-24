@@ -1,0 +1,79 @@
+loaded 27272 rows from 14 shards, judges=['OpenGVLab/InternVL3-8B', 'Qwen/Qwen3-VL-8B-Instruct']
+parse rate: 100.0%
+27272 rows, judges: OpenGVLab/InternVL3-8B vs Qwen/Qwen3-VL-8B-Instruct
+
+=== agreement on reward, per presentation ===
+  mean_abs_diff is on the readout's own scale; pearson/spearman say
+  whether they rank the same regions the same way.
+  presentation    n  mean_a  mean_b  pearson  spearman  mean_abs_diff                judge_a                   judge_b
+      baseline 1540   0.503   0.599    0.514     0.551          0.232 OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct
+           box 1540   0.434   0.614    0.407     0.434          0.297 OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct
+       enhance 1540   0.490   0.575    0.481     0.525          0.229 OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct
+enhance_target 1540   0.502   0.588    0.474     0.531          0.231 OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct
+         noimg 1540   0.723   0.744    0.051     0.294          0.091 OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct
+       shuffle 1540   0.507   0.598    0.444     0.480          0.254 OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct
+        subset 1064   0.516   0.565    0.463     0.485          0.240 OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct
+
+=== do they call the SAME edits failed? (sc_success < 20) ===
+  jaccard 1.0 = identical sets. Low overlap means each judge's
+  exploit split is about a different set of photographs.
+  [sc_success] using 3080/4032 rows (952 missing this readout)
+presentation    n  failed_below                judge_a                   judge_b  failed_a  failed_b  both_failed  only_a  only_b  neither  jaccard  agree
+    baseline 1540          20.0 OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct       764       587          518     246      69      707    0.622  0.795
+
+=== the exploit split, WITHOUT the circularity ===
+  One judge picks the failed edits, the other's gain is measured on
+  them. A cell whose CI covers zero here is reversion to the mean,
+  not an exploit, however tight its own-judge interval looked.
+  [sc_success] using 3080/4032 rows (952 missing this readout)
+  presentation readout                gain_judge                  split_by   edit   n  n_bases  mean_gain  ci_lo  ci_hi
+           box  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct failed 587       93     -0.067 -0.111 -0.023
+           box  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct     ok 953      128     -0.070 -0.103 -0.038
+       enhance  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct failed 587       93     -0.007 -0.032  0.018
+       enhance  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct     ok 953      128     -0.014 -0.035  0.007
+enhance_target  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct failed 587       93      0.012 -0.001  0.029
+enhance_target  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct     ok 953      128     -0.010 -0.022  0.003
+         noimg  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct failed 587       93      0.381  0.325  0.437
+         noimg  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct     ok 953      128      0.116  0.073  0.160
+       shuffle  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct failed 587       93      0.032 -0.014  0.078
+       shuffle  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct     ok 953      128     -0.014 -0.041  0.013
+        subset  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct failed 416       93      0.049  0.010  0.093
+        subset  reward    OpenGVLab/InternVL3-8B Qwen/Qwen3-VL-8B-Instruct     ok 648      128     -0.003 -0.030  0.022
+           box  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B failed 764      120      0.028 -0.010  0.071
+           box  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B     ok 776      125     -0.016 -0.038  0.004
+       enhance  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B failed 764      120     -0.011 -0.048  0.030
+       enhance  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B     ok 776      125     -0.044 -0.072 -0.018
+enhance_target  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B failed 764      120     -0.002 -0.028  0.027
+enhance_target  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B     ok 776      125     -0.029 -0.043 -0.015
+         noimg  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B failed 764      120      0.273  0.213  0.333
+         noimg  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B     ok 776      125     -0.016 -0.058  0.029
+       shuffle  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B failed 764      120      0.002 -0.041  0.045
+       shuffle  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B     ok 776      125     -0.019 -0.049  0.011
+        subset  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B failed 539      120     -0.022 -0.060  0.014
+        subset  reward Qwen/Qwen3-VL-8B-Instruct    OpenGVLab/InternVL3-8B     ok 525      125     -0.055 -0.087 -0.026
+
+  enhance on InternVL3-8B: -0.007 [-0.032, +0.018] when 'failed' comes from the other judge.
+  Do not report this axis as an exploit.
+
+  enhance_target on InternVL3-8B: +0.012 [-0.001, +0.029] when 'failed' comes from the other judge.
+  Do not report this axis as an exploit.
+
+  shuffle on InternVL3-8B: +0.032 [-0.014, +0.078] when 'failed' comes from the other judge.
+  Do not report this axis as an exploit.
+
+  box on Qwen3-VL-8B-Instruct: +0.028 [-0.010, +0.071] when 'failed' comes from the other judge.
+  Do not report this axis as an exploit.
+
+  enhance on Qwen3-VL-8B-Instruct: -0.011 [-0.048, +0.030] when 'failed' comes from the other judge.
+  Do not report this axis as an exploit.
+
+  enhance_target on Qwen3-VL-8B-Instruct: -0.002 [-0.028, +0.027] when 'failed' comes from the other judge.
+  Do not report this axis as an exploit.
+
+  shuffle on Qwen3-VL-8B-Instruct: +0.002 [-0.041, +0.045] when 'failed' comes from the other judge.
+  Do not report this axis as an exploit.
+
+  subset on Qwen3-VL-8B-Instruct: -0.022 [-0.060, +0.014] when 'failed' comes from the other judge.
+  Do not report this axis as an exploit.
+
+wrote results/main8b_2026-10-22/agreement

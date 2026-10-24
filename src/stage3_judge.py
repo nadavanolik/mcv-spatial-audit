@@ -29,7 +29,7 @@ from tqdm import tqdm
 from . import judge_prompt
 from .judge_prompt import (build_sc_prompt, build_pq_prompt, parse_sc, parse_pq,
                            region_reward, sc_json_schema, pq_json_schema,
-                           REASONING_MODES)
+                           REASONING_MODES, BBOX_FRAMES)
 from .presentation import (PRESENTATIONS, TEXT_AXES, present, enhance,
                            enhance_region, draw_boxes)
 from .schema import shard
@@ -73,7 +73,16 @@ DEFAULT_GPU_UTIL = 0.89
 GPU_UTIL_FLOOR = 0.87        # below this the KV cache goes negative on an A10
 
 
-def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL):
+# InternVL tiles each image into up to this many 448px crops plus a thumbnail,
+# 256 tokens each. 2 is what the A10 runs of InternVL3-2B used (commit b780aa9,
+# cut from 6 to fit the card). The InternVL3-8B runs used 6 tiles at
+# --max-model-len 8192: 2 images x 7 x 256 = 3,584 image tokens. Every
+# per-image item stays under max_num_batched_tokens=2048 up to 7 tiles.
+DEFAULT_MAX_DYNAMIC_PATCH = 2
+
+
+def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL,
+                tiles: int = DEFAULT_MAX_DYNAMIC_PATCH):
     # vLLM's own message for this reports the shortfall but not the fix, and it
     # arrives after a model download. Check first and say what to pass.
     try:
@@ -102,7 +111,7 @@ def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL)
               f"start. Raising it is the fix, not lowering it.")
 
     try:
-        return _build_engine(model, max_len, util)
+        return _build_engine(model, max_len, util, tiles)
     except (RuntimeError, ValueError) as e:
         # The engine runs in a CHILD process, so any startup failure reaches us
         # as the same generic "Engine core initialization failed" -- the real
@@ -183,7 +192,7 @@ def _whitespace_kwargs() -> dict:
     return {}
 
 
-def _mm_args(model: str) -> tuple[dict, dict]:
+def _mm_args(model: str, tiles: int = DEFAULT_MAX_DYNAMIC_PATCH) -> tuple[dict, dict]:
     """(limit_mm_per_prompt, mm_processor_kwargs) for this model family.
 
     One definition, read by both _build_engine and dry_run, so the dry run can
@@ -195,10 +204,10 @@ def _mm_args(model: str) -> tuple[dict, dict]:
         return ({"image": 2, "video": 0},
                 {"max_pixels": MAX_PIXELS, "min_pixels": MIN_PIXELS})
     return ({"image": 2},
-            {"max_dynamic_patch": 2} if "internvl" in lower else {})
+            {"max_dynamic_patch": tiles} if "internvl" in lower else {})
 
 
-def _build_engine(model: str, max_len: int, util: float):
+def _build_engine(model: str, max_len: int, util: float, tiles: int):
     from vllm import LLM
 
     ws = _whitespace_kwargs()
@@ -208,7 +217,7 @@ def _build_engine(model: str, max_len: int, util: float):
     # Both multimodal arguments below are family-specific. The "video": 0 limit
     # and the pixel budget are Qwen3-VL's; another family needs neither, and a
     # processor kwarg its processor does not accept is a startup error.
-    mm_limits, mm_kwargs = _mm_args(model)
+    mm_limits, mm_kwargs = _mm_args(model, tiles)
 
     # InternVL ships its own modeling code and vLLM refuses to load it without
     # this. It means executing Python from the model repo, which is why it is
@@ -269,7 +278,8 @@ def _build_engine(model: str, max_len: int, util: float):
 
 
 def build_requests(rows: pd.DataFrame, bases: Path, variants: Path,
-                   presentation: str = "baseline") -> tuple[list, list]:
+                   presentation: str = "baseline",
+                   bbox_frame: str = "pixel") -> tuple[list, list]:
     """Two requests per variant, following A.4.3 / A.4.4:
 
       SC  source + edited, scoring EVERY region at once (plus background and
@@ -292,12 +302,17 @@ def build_requests(rows: pd.DataFrame, bases: Path, variants: Path,
     the edited image is unchanged. That costs 50% more requests than skipping
     it, and buys a populated `reward` column under every condition so the
     tables read directly against the main run's.
+
+    `bbox_frame` is the coordinate frame of the region boxes written into the
+    SC prompt (judge_prompt.BBOX_FRAMES). norm1000 scales by the SOURCE size;
+    stage 1 resizes every edit back to it, so both images share that frame.
     """
     msgs, meta = [], []
     for row in rows.itertuples():
         regions = json.loads((bases / row.base_id / "regions.json").read_text())
         src = Image.open(bases / row.base_id / "source.png").convert("RGB")
         edit = Image.open(variants / f"{row.variant_id}.png").convert("RGB")
+        size = src.size
 
         shown = present(regions, row.target_region_id, row.variant_id, presentation)
         if presentation == "enhance":
@@ -322,7 +337,8 @@ def build_requests(rows: pd.DataFrame, bases: Path, variants: Path,
 
         msgs.append([{"role": "user", "content": [
             *({"type": "image_pil", "image_pil": im} for im in pics),
-            {"type": "text", "text": build_sc_prompt(row.instruction, shown)},
+            {"type": "text", "text": build_sc_prompt(row.instruction, shown,
+                                                     bbox_frame, size)},
         ]}])
         meta.append({**common, "kind": "sc"})
 
@@ -500,6 +516,14 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
     return pd.DataFrame(recs)
 
 
+def _gpu_name() -> str | None:
+    try:
+        import torch
+        return torch.cuda.get_device_name(0)
+    except Exception:       # provenance only; never fail a judged shard over it
+        return None
+
+
 def preflight(rows: pd.DataFrame, bases: Path, variants: Path) -> dict:
     """Stat every file build_requests will open, without decoding any of them.
 
@@ -559,7 +583,8 @@ def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
               "(variants) first, or point --bases/--variants elsewhere.")
         return 1
 
-    msgs, meta = build_requests(rows, bases, variants, a.presentation)
+    msgs, meta = build_requests(rows, bases, variants, a.presentation,
+                                a.bbox_frame)
     per_variant = len(msgs) / max(len(rows), 1)
     print(f"{len(msgs)} requests ({per_variant:.2f} per variant: 1 SC + 1 PQ) "
           f"x n={a.n_samples} = {len(msgs) * a.n_samples} generations")
@@ -608,10 +633,11 @@ def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
     print(f"  model={a.model} dtype=bfloat16 "
           f"max_model_len={a.max_model_len} "
           f"gpu_memory_utilization={a.gpu_util}")
-    dry_limits, dry_mm_kwargs = _mm_args(a.model)
+    dry_limits, dry_mm_kwargs = _mm_args(a.model, a.max_dynamic_patch)
     print(f"  enforce_eager=True max_num_batched_tokens=2048 "
           f"limit_mm_per_prompt={dry_limits}")
     print(f"  mm_processor_kwargs={dry_mm_kwargs}")
+    print(f"  bbox_frame={a.bbox_frame} (the bbox_2d values in the prompt above)")
 
     if "PLACEHOLDER" in (judge_prompt.__doc__ or ""):
         # ASCII only: this runs on a Windows console, which is not UTF-8.
@@ -675,6 +701,17 @@ def main():
                          "out/scores_shard*.parquet: stage 4 does not group by "
                          "presentation and would pool the conditions together "
                          "silently.")
+    ap.add_argument("--bbox-frame", default="pixel", choices=BBOX_FRAMES,
+                    help="coordinate frame of the region boxes in the SC "
+                         "prompt. pixel (default) is what every run before "
+                         "2026-10-22 sent; norm1000 is the 0-1000 relative "
+                         "frame Qwen3-VL and InternVL3 ground in. A stage-3 "
+                         "flag, never a manifest column (invariant 7).")
+    ap.add_argument("--max-dynamic-patch", type=int,
+                    default=DEFAULT_MAX_DYNAMIC_PATCH,
+                    help="InternVL only: max 448px tiles per image (default "
+                         f"{DEFAULT_MAX_DYNAMIC_PATCH}, what the A10 runs used). "
+                         "6 needs --max-model-len 8192. Ignored for Qwen.")
     ap.add_argument("--no-structured", action="store_true",
                     help="disable JSON-schema-constrained decoding. Only for "
                          "measuring what the constraint is worth -- "
@@ -730,10 +767,13 @@ def main():
             lines.append("Run stage 0 and stage 1 first, or point --bases elsewhere.")
         raise SystemExit("\n".join(lines))
 
-    msgs, meta = build_requests(df, Path(a.bases), Path(a.variants), a.presentation)
-    print(f"{len(msgs)} requests x n={a.n_samples} (presentation={a.presentation})")
+    msgs, meta = build_requests(df, Path(a.bases), Path(a.variants), a.presentation,
+                                a.bbox_frame)
+    print(f"{len(msgs)} requests x n={a.n_samples} (presentation={a.presentation}, "
+          f"bbox_frame={a.bbox_frame})")
 
-    llm = load_engine(a.model, max_len=a.max_model_len, util=a.gpu_util)
+    llm = load_engine(a.model, max_len=a.max_model_len, util=a.gpu_util,
+                      tiles=a.max_dynamic_patch)
     res = run(llm, msgs, meta, a.n_samples, a.temperature,
               structured=not a.no_structured, reasoning=a.reasoning)
     res["judge"] = a.model
@@ -743,6 +783,14 @@ def main():
     # ambiguity scripts/nuisance_report.py has to work around by filename.
     res["n_samples"] = a.n_samples
     res["temperature"] = a.temperature
+    # Engine provenance. Runs on different hardware or box frames are kept in
+    # separate directories, but a parquet must still say how it was made.
+    res["bbox_frame"] = a.bbox_frame
+    res["max_model_len"] = a.max_model_len
+    res["gpu_util"] = a.gpu_util
+    res["max_dynamic_patch"] = (a.max_dynamic_patch if "internvl" in a.model.lower()
+                                else None)
+    res["gpu_name"] = _gpu_name()
 
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     res.to_parquet(a.out)

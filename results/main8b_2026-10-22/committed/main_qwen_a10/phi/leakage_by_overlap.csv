@@ -1,0 +1,7 @@
+judge,relation,n,n_bases,mean_delta,frac_moved
+Qwen/Qwen3-VL-8B-Instruct,target,2839,105,-1.8330985088646239,0.2504402958788306
+Qwen/Qwen3-VL-8B-Instruct,"other, box damaged 0",2676,85,-1.2360488290981564,0.19170403587443946
+Qwen/Qwen3-VL-8B-Instruct,"other, box damaged (0,0.01]",633,73,-0.6274354923644023,0.14375987361769352
+Qwen/Qwen3-VL-8B-Instruct,"other, box damaged (0.01,0.1]",1744,87,-1.10579128440367,0.22362385321100917
+Qwen/Qwen3-VL-8B-Instruct,"other, box damaged (0.1,0.5]",1001,72,-1.397852147852148,0.26173826173826176
+Qwen/Qwen3-VL-8B-Instruct,"other, box damaged >0.5",153,23,-2.1911764705882355,0.2875816993464052

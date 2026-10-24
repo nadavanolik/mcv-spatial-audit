@@ -112,6 +112,121 @@ def make_scores(behaviour: str, judge: str, seed: int) -> pd.DataFrame:
     return pd.DataFrame(recs)
 
 
+def make_deltas(kind: str, seed: int, n_photos: int = 60) -> pd.DataFrame:
+    """A delta table (stage 4's internal shape) for judges whose coupling is
+    known. Two conditions per photo: `hard`, where regions move 95% of the
+    time, and `soft`, where they move 5% of the time - the heterogeneity that
+    a single pooled move rate mistakes for coupling.
+
+      independent  each (variant, region) moves on its own coin at the cell rate
+      whole        one coin per variant, copied to every region
+      perfect      only the damaged region moves; untouched ones carry noise
+      global       every region moves by one shared per-variant shock
+    """
+    rng = np.random.default_rng(seed)
+    recs = []
+    for b in range(n_photos):
+        for corr, rate in (("hard", 0.95), ("soft", 0.05)):
+            for target in REGIONS:
+                vid = f"p{b:03d}_{corr}_{target}"
+                coin = rng.random() < rate
+                shock = rng.normal(0, 3)
+                for scored in REGIONS:
+                    if kind == "independent":
+                        delta = -1.0 if rng.random() < rate else 0.0
+                    elif kind == "whole":
+                        delta = -1.0 if coin else 0.0
+                    elif kind == "perfect":
+                        delta = (-5.0 if scored == target else 0.0) + rng.normal(0, 1)
+                    else:
+                        delta = shock + rng.normal(0, 0.5)
+                    recs.append(dict(
+                        judge=f"fixture/{kind}", base_id=f"p{b:03d}", variant_id=vid,
+                        scored_region_id=str(scored), target_region_id=str(target),
+                        corruption=corr, severity="1", area_bin="full",
+                        delta=delta, is_target=scored == target))
+    return pd.DataFrame(recs)
+
+
+def coherence_redundancy_overlap_checks(tmp: Path) -> bool:
+    from src.stage4_analyze import (attach_overlap, leakage_by_overlap,
+                                    overlap_split, redundancy_delta,
+                                    response_coherence)
+    ok = True
+
+    print("\n" + "=" * 68)
+    print("11. COHERENCE: the permutation null is not fooled by uneven move rates")
+    print("=" * 68)
+    ind = response_coherence(make_deltas("independent", 1)).iloc[0]
+    whole = response_coherence(make_deltas("whole", 2)).iloc[0]
+    print(f"  independent: mixed {ind.frac_mixed:.3f} null {ind.mixed_null:.3f} "
+          f"pooled-formula {ind.mixed_if_independent:.3f}")
+    print(f"  whole-image: mixed {whole.frac_mixed:.3f} null {whole.mixed_null:.3f}")
+    ok &= check("independent judge: observed ~ permutation null",
+                abs(ind.gap) < 0.03 and ind.gap_lo <= 0 <= ind.gap_hi,
+                f"gap {ind.gap:+.3f} [{ind.gap_lo:+.3f}, {ind.gap_hi:+.3f}]")
+    ok &= check("independent judge: the pooled formula would call it coupled",
+                ind.mixed_if_independent > ind.frac_mixed + 0.3,
+                f"{ind.mixed_if_independent:.3f} vs {ind.frac_mixed:.3f}")
+    ok &= check("whole-image judge: observed far below the null",
+                whole.frac_mixed == 0 and whole.gap_hi < -0.03,
+                f"gap {whole.gap:+.3f} [{whole.gap_lo:+.3f}, {whole.gap_hi:+.3f}]")
+    ok &= check("same seed, same numbers",
+                response_coherence(make_deltas("independent", 1)).equals(
+                    response_coherence(make_deltas("independent", 1))))
+
+    print("\n" + "=" * 68)
+    print("12. REDUNDANCY ON DELTAS: a perfect judge scores low, a global one high")
+    print("=" * 68)
+    rp = redundancy_delta(make_deltas("perfect", 3)).iloc[0]
+    rg = redundancy_delta(make_deltas("global", 4)).iloc[0]
+    print(f"  perfect R^2 {rp.r2:.3f} [{rp.r2_lo:.3f}, {rp.r2_hi:.3f}]   "
+          f"global R^2 {rg.r2:.3f} [{rg.r2_lo:.3f}, {rg.r2_hi:.3f}]")
+    ok &= check("perfect judge: untouched deltas are uncorrelated", rp.r2 < 0.05)
+    ok &= check("global judge: untouched deltas move together", rg.r2 > 0.8)
+    ok &= check("interval brackets the point estimate",
+                rg.r2_lo <= rg.r2 <= rg.r2_hi and rp.r2_lo <= rp.r2 <= rp.r2_hi)
+    ok &= check("photographs, not rows, are the sample", rg.n_photos == 60)
+
+    print("\n" + "=" * 68)
+    print("13. OVERLAP SPLIT: a judge that only reacts to damage in a box")
+    print("=" * 68)
+    # A spatially perfect judge whose non-target regions move ONLY when the
+    # damage reached their box. On all pairs that reads as leakage; on clean
+    # pairs it must read as a perfect localiser.
+    d = make_deltas("perfect", 5).assign(judge="fixture/boxed")
+    d["delta"] = np.where(d.is_target, -5.0, 0.0)
+    rng = np.random.default_rng(6)
+    ov = d[~d.is_target][["variant_id", "base_id", "target_region_id",
+                          "scored_region_id"]].rename(
+                              columns={"scored_region_id": "other_region_id"})
+    # Overlap on even-numbered photos only, so the photo-level cut has
+    # something left to keep.
+    even = ov.base_id.str[1:].astype(int) % 2 == 0
+    ov["other_box_damaged"] = np.where(even & (rng.random(len(ov)) < 0.5), 0.4, 0.0)
+    ov_csv = tmp / "overlap.csv"
+    ov.to_csv(ov_csv, index=False)
+    hit = d.merge(ov.rename(columns={"other_region_id": "scored_region_id"}),
+                  how="left").other_box_damaged.fillna(0).to_numpy() > 0
+    d.loc[hit, "delta"] = -5.0
+    dov = attach_overlap(d, str(ov_csv))
+    sp = overlap_split(dov, [0.0]).set_index("subset")
+    print(sp[["n_bases", "n_rows", "auroc", "other_unchanged"]].round(3).to_string())
+    ok &= check("all pairs: overlap looks like leakage",
+                sp.loc["all", "auroc"] < 0.95 and sp.loc["all", "other_unchanged"] < 0.9)
+    ok &= check("clean pairs: perfect localisation",
+                sp.loc["pairs<=0.0", "auroc"] == 1.0
+                and sp.loc["pairs<=0.0", "other_unchanged"] == 1.0)
+    ok &= check("photo-level cut keeps only photos with no overlap",
+                sp.loc["photos<=0.0", "n_bases"] == 30
+                and sp.loc["photos<=0.0", "auroc"] == 1.0)
+    lb = leakage_by_overlap(dov).set_index("relation")
+    ok &= check("leakage by relation: untouched boxes never move",
+                lb.loc["other, box damaged 0", "frac_moved"] == 0.0
+                and lb.loc["other, box damaged (0.1,0.5]", "frac_moved"] == 1.0)
+    return ok
+
+
 def check(name: str, cond: bool, detail: str = "") -> bool:
     print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""))
     return cond
@@ -355,6 +470,8 @@ def main() -> int:
     ok &= check("--drift-csv runs end to end", r2.returncode == 0)
     ok &= check("wrote drift_robustness.csv",
                 (outdir / "drift_robustness.csv").exists())
+
+    ok &= coherence_redundancy_overlap_checks(tmp)
 
     print()
     print("=" * 68)

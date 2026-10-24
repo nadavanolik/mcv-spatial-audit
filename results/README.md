@@ -8,6 +8,7 @@ to it. Each run folder has a `REPRODUCE.md` with the exact commands.
 
 | Folder | What it is | Judge(s) | Size |
 |---|---|---|---|
+| [`main8b_2026-10-22/`](main8b_2026-10-22/) | **The run the report is written from.** The main audit and all seven presentations on the clean edits, boxes in the 0-1000 frame; plus a pixel-box Qwen re-run and the stimulus checks | Qwen3-VL-8B, InternVL3-8B | 22,176 scored regions per main run |
 | [`main_2026-09-18/`](main_2026-09-18/) | The main audit: 150 COCO photos, 476 regions, 5,236 variants (5 corruptions), greedy | Qwen3-VL-8B | 22,176 scored regions |
 | [`internvl3_2b_2026-09-26/`](internvl3_2b_2026-09-26/) | Raw scores only: the same 5,236 variants judged by a second model | InternVL3-2B | 22,176 scored regions |
 | [`two_judge_2026-09-26/`](two_judge_2026-09-26/) | Analysis of both judges side by side, built from the two folders above | both | - |
@@ -18,28 +19,37 @@ to it. Each run folder has a `REPRODUCE.md` with the exact commands.
 
 ## Where each report number comes from
 
-| Report section | Quantity | File |
-|---|---|---|
-| 3.1 Sensitivity | image-level PQ / AES change by corruption and severity | `main_2026-09-18/pq_response.csv` |
-| 3.2 Localization | ROC-AUC, `reward`, floor-excluded | `two_judge_2026-09-26/localization_reward.csv` |
-| 3.2 Localization | ROC-AUC, `phi` | `two_judge_2026-09-26/phi/localization_phi.csv` |
-| 3.2 Localization | share of damaged vs untouched regions whose score did not move | `main_2026-09-18/floor_excluded/sensitivity.csv` |
-| 3.3 Global coupling | redundancy R^2 on `phi` | `two_judge_2026-09-26/redundancy_phi.csv` |
-| 3.3 Global coupling | coherence (mixed vs expected-if-independent), `phi` | `two_judge_2026-09-26/phi/coherence.csv` |
-| 3.3 Robustness | layout-drift split | `main_2026-09-18/drift_robustness.csv` |
-| Exploitability | blind (`noimg`) and cosmetic gains, with bootstrap intervals | `exploit_150_2026-09-29/{qwen,internvl}/exploitability.csv` |
-| Judge agreement | Cohen's kappa, Jaccard, correlation between the two judges | `exploit_150_2026-09-29/agreement/` |
-| Nuisance | score change under `shuffle` / `subset` / `box` as a ratio of real damage, with paired photo-bootstrap intervals; headline is floor-excluded | `nuisance_150_2026-10-14/floor_excluded/nuisance.csv` (`phi/` for `phi`; the parent folder has the all-region cut) |
-| Nuisance | list-position effect within a photo | `nuisance_150_2026-10-14/slot_effect.csv` |
-| Nuisance | identity shuffles (request unchanged) vs reordered: the null inside the run | `nuisance_150_2026-10-14/identity_null.csv`; InternVL in `internvl/` |
-| Nuisance, cross-family | InternVL against its own noise (never against damage) | `nuisance_150_2026-10-14/internvl/` (`floor_excluded/`, `phi/`) |
-| Noise floor | greedy disagreement between byte-identical requests | `nuisance_150_2026-10-14/report.txt` |
+All from [`main8b_2026-10-22/`](main8b_2026-10-22/). `<judge>` is
+`main_qwen_norm` (Qwen3-VL-8B) or `main_ivl8` (InternVL3-8B); `<nuis>` is
+`nuis_qwen` or `nuis_ivl8`.
 
-`scripts/make_figures.py` writes `figures/fig_localization.png`,
-`figures/fig_tie_rate.png` and `figures/tab_tie_rate.tex`:
+| Report | Quantity | File |
+|---|---|---|
+| Fig. 1a, Table 2 | image-level AES change by corruption and setting, with photo-bootstrap intervals | `<judge>/analysis/pq_response.csv` |
+| Fig. 1b, Table 1 | AUROC on `phi`, floor-excluded, per corruption | `<judge>/analysis/phi/localization_by_corruption_phi.csv`; per-region deltas in `phi/deltas.parquet` |
+| Table 1 | share of corrupted vs untouched regions whose `phi` did not move | `<judge>/analysis/phi/sensitivity.csv` |
+| Results, robustness | untouched regions the damage reached; layout drift | `<judge>/analysis/phi/{overlap_split,drift_robustness}.csv` |
+| Results, robustness | pixel vs 0-1000 boxes, Qwen | `compare/frame/headline.csv` |
+| Results, coupling | mixed variants vs the permutation null | `<judge>/analysis/phi/coherence.csv` |
+| Results, coupling | R^2 of an untouched region's delta on the others' | `<judge>/analysis/phi/redundancy_delta_phi.csv` |
+| Results, noise floor | disagreement between identical clean-control requests | `<judge>/analysis/phi/noise_floor.csv` |
+| Table 3 | nuisance ratio (`shuffle`, `subset`, `box`) against damage, floor-excluded | `<nuis>/analysis/floor_excluded/phi/nuisance.csv` |
+| Results, exploitability | `noimg`, `enhance`, `enhance_target` gains on failed edits | `<nuis>/analysis/floor_excluded/phi/exploitability.csv` |
+| Results, exploitability | the same with failed edits picked by the other judge | `agreement/crossjudge_exploit.csv` |
+| Fig. 2-3 | one photograph, pipeline and per-region delta | `figures/fig_example_*.png` (`scripts/make_examples.py`) |
+
+The earlier folders below hold the A10 runs (pixel boxes, InternVL3-2B as the
+second judge) that preceded the report. Their numbers point the same way but
+are not the ones printed in it.
+
+`scripts/make_figures.py` writes `figures/fig_perception_localization.{png,pdf,csv}`
+(Fig. 1) and `scripts/make_examples.py` the two example figures (needs
+`data/bases`). `fig_localization.png`, `fig_tie_rate.png` and `tab_tie_rate.tex`
+are from the earlier A10 runs.
 
 ```bash
 python -m scripts.make_figures
+python -m scripts.make_examples
 ```
 
 ## Conventions
@@ -48,9 +58,10 @@ python -m scripts.make_figures
   dropped (`--min-control 0`). Such a region cannot drop when damaged, so it is
   a guaranteed tie. The headline numbers are floor-excluded; the CSVs directly
   in `main_2026-09-18/` (not under `floor_excluded/`) include every region.
+  In `main8b_2026-10-22/`, every main-run analysis is floor-excluded and the
+  nuisance reports carry both cuts (`all/`, `floor_excluded/`).
 - **`reward`** is the paper's Equation (3), `sqrt(phi * AES) / C`. **`phi`** is
   its per-region part, `min(success, preserve)` on a 0-25 scale, without the
   image-level AES factor that every region of an image shares.
-- Intervals in `exploit_150_2026-09-29/` are 95% bootstrap over photographs,
-  not regions.
+- Intervals are 95% bootstrap over photographs, not regions.
 - Full interpretation and caveats: [`../docs/FINDINGS.md`](../docs/FINDINGS.md).

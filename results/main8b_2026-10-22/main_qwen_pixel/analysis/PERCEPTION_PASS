@@ -1,0 +1,3 @@
+judges=['Qwen/Qwen3-VL-8B-Instruct']
+  noise 3: dAES -2.685 [-3.109, -2.303]  pass
+  remove binary: dAES -2.535 [-2.928, -2.150]  pass

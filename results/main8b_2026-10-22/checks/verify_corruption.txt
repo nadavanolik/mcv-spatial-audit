@@ -1,0 +1,25 @@
+
+=== corruption strength (8-bit levels, 0-255) ===
+corruption  severity   n  inside  outside  changed  area  contrast
+      blur         1 476   7.156    0.055    0.359 0.082   130.147
+      blur         3 476  17.215    0.123    0.675 0.082   139.685
+      jpeg         1 476   4.792    0.037    0.323 0.082   128.876
+      jpeg         3 476  10.110    0.072    0.704 0.082   141.134
+     noise         1 476   4.184    0.033    0.293 0.082   125.604
+     noise         3 476  18.343    0.123    0.949 0.082   149.576
+    remove         1 476  34.768    0.002    0.762 0.082 20195.062
+    remove         3 476  34.583    0.002    0.789 0.082 20087.808
+  saturate         1 476   5.901    0.050    0.390 0.082   118.857
+  saturate         3 476  14.974    0.109    0.649 0.082   137.892
+
+--- reading this ---
+  WARNING: 2 cell(s) change the masked region by less
+  than 5 levels on average. A judge that ignores
+  those is not wrong. Raise the severities before reporting any
+  insensitivity result:
+corruption  severity  inside
+      jpeg         1    4.79
+     noise         1    4.18
+
+  OK: outside-mask difference is ~0, so damage is confined to
+  the region we targeted. Leakage in the scores is the judge's.

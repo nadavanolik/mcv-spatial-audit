@@ -1,0 +1,170 @@
+loaded 13636 rows from 7 shards, judges=['Qwen/Qwen3-VL-8B-Instruct']
+parse rate: 100.0%
+
+=== conditions ===
+  presentation  rows  parse_rate  scored  reward
+      baseline  1540         1.0     1.0     1.0
+           box  1540         1.0     1.0     1.0
+       enhance  1540         1.0     1.0     1.0
+enhance_target  1540         1.0     1.0     1.0
+         noimg  1540         1.0     1.0     1.0
+       shuffle  1540         1.0     1.0     1.0
+        subset  1064         1.0     1.0     1.0
+
+=== noise floor, reward (identical baseline requests) ===
+  2316 pairs of byte-identical requests in one greedy run
+  mean |delta| 0.0116, unchanged 96.3%
+  vs_floor below is against this mean |delta|.
+loaded 22176 rows from 5 shards, judges=['Qwen/Qwen3-VL-8B-Instruct']
+parse rate: 100.0%
+
+=== reference: what REAL damage does (reward) ===
+                    judge corruption severity  n_target  target_unchanged  target_dropped  target_rose  other_unchanged
+Qwen/Qwen3-VL-8B-Instruct       blur        1       476             0.645           0.248        0.107            0.668
+Qwen/Qwen3-VL-8B-Instruct       blur        3       476             0.483           0.426        0.090            0.504
+Qwen/Qwen3-VL-8B-Instruct       jpeg        1       476             0.718           0.170        0.111            0.717
+Qwen/Qwen3-VL-8B-Instruct       jpeg        3       476             0.462           0.426        0.111            0.479
+Qwen/Qwen3-VL-8B-Instruct      noise        1       476             0.708           0.168        0.124            0.695
+Qwen/Qwen3-VL-8B-Instruct      noise        3       476             0.393           0.536        0.071            0.418
+Qwen/Qwen3-VL-8B-Instruct     remove   binary       952             0.395           0.502        0.103            0.417
+Qwen/Qwen3-VL-8B-Instruct   saturate        1       476             0.725           0.172        0.103            0.711
+Qwen/Qwen3-VL-8B-Instruct   saturate        3       476             0.647           0.233        0.120            0.651
+  mean |delta| on the DAMAGED region: 0.0763
+  share of damaged regions that did not move at all: 55.7%
+
+=== NUISANCE: does a null change move the score (reward)? ===
+  vs_damage: 1.0 means a nuisance change moves the score as much as
+  real damage to the region does. text axes change NO pixels.
+presentation  kind    n  unchanged  mean_abs_delta  mean_delta  vs_damage  vs_floor  photo_mean_abs  photo_lo  photo_hi  n_bases  ratio  ratio_lo  ratio_hi
+         box image 2016     0.5878          0.0943      0.0083     1.2364    8.0991          0.0923    0.0734    0.1158      150 1.1943    0.9391    1.5406
+     shuffle  text 2016     0.6632          0.1170     -0.0040     1.5345   10.0518          0.1129    0.0922    0.1356      150 1.4611    1.1791    1.8191
+      subset  text 1540     0.6779          0.1089     -0.0385     1.4283    9.3562          0.1054    0.0856    0.1253      150 1.3644    1.0816    1.6924
+
+  shuffle: a change that touches no pixel moves reward by 0.1170,
+  1.53x what damaging the region does. The score is responding to
+  the packaging, not the region.
+
+  subset: a change that touches no pixel moves reward by 0.1089,
+  1.43x what damaging the region does. The score is responding to
+  the packaging, not the region.
+
+=== identity shuffles: the null inside the shuffle run (reward) ===
+  identity = canonical order kept, request byte-identical to baseline.
+                    judge     order  n_variants    n  n_bases  mean_abs_delta  photo_mean_abs  photo_lo  photo_hi  unchanged
+Qwen/Qwen3-VL-8B-Instruct reordered         418 1363      150          0.1356          0.1282    0.1054    0.1528     0.6383
+Qwen/Qwen3-VL-8B-Instruct  identity          58  177       54          0.0182          0.0199    0.0021    0.0450     0.9548
+
+=== does the score follow LIST POSITION? (shuffle, reward) ===
+  Region ids are shuffled per variant, so slot and region id are
+  decorrelated. A trend across slots is position, not content.
+                    judge  slot_idx  mean   std  size  within  within_lo  within_hi
+Qwen/Qwen3-VL-8B-Instruct         0 0.611 0.343   476   0.015      0.004      0.027
+Qwen/Qwen3-VL-8B-Instruct         1 0.626 0.362   476   0.004     -0.006      0.014
+Qwen/Qwen3-VL-8B-Instruct         2 0.586 0.379   476  -0.017     -0.029     -0.006
+Qwen/Qwen3-VL-8B-Instruct         3 0.462 0.392    92  -0.012     -0.052      0.022
+Qwen/Qwen3-VL-8B-Instruct         4 0.507 0.387    20  -0.015     -0.083      0.040
+
+=== EXPLOITABILITY: can the score be pushed UP for free? ===
+  enhance is a global cosmetic lift; no edit is improved by it.
+  enhance_target is the same lift inside the target region's box only.
+  reward carries AES = min(PQ), an image-level factor; phi does not.
+  presentation readout    n  n_bases  baseline_mean  condition_mean  mean_gain   ci_lo   ci_hi  frac_rose
+         noimg  reward 2016      150         0.6373          0.7533     0.0998  0.0598  0.1429     0.3988
+         noimg     phi 2016      150        17.5149         19.9891     2.1319  1.0273  3.3283     0.3517
+       enhance  reward 2016      150         0.6373          0.6062    -0.0385 -0.0584 -0.0188     0.0878
+       enhance     phi 2016      150        17.5149         17.2941    -0.3961 -0.9251  0.0944     0.0640
+enhance_target  reward 2016      150         0.6373          0.6202    -0.0214 -0.0354 -0.0063     0.0759
+enhance_target     phi 2016      150        17.5149         17.4206    -0.1928 -0.5685  0.1895     0.0605
+
+  noimg raised mean reward by +0.0998 [+0.0598, +0.1429] (40% of regions rose)
+  with no edit improved. An editor trained on this reward learns the trick.
+
+=== EXPLOIT on clean edits: failed vs ok, target vs other ===
+  failed = baseline sc_success below 20. n_bases is the
+  effective sample; regions within one photo are not independent.
+  [sc_success] using 10304/13636 rows (3332 missing this readout)
+  presentation readout  where   edit   n  n_bases  mean_gain   ci_lo   ci_hi  frac_rose
+         noimg  reward  other failed 410       93     0.4338  0.3759  0.4954     0.9439
+         noimg  reward  other     ok 654      128    -0.0815 -0.1001 -0.0612     0.1239
+         noimg  reward target failed 177       91     0.4472  0.3860  0.5088     0.9435
+         noimg  reward target     ok 299      128    -0.0829 -0.1016 -0.0621     0.1137
+         noimg     phi  other failed 410       93    12.2034 10.7734 13.6683     0.9366
+         noimg     phi  other     ok 654      128    -3.1245 -3.6830 -2.5574     0.0398
+         noimg     phi target failed 177       91    12.5092 11.0357 14.0150     0.9379
+         noimg     phi target     ok 299      128    -3.1960 -3.7416 -2.6139     0.0401
+       enhance  reward  other failed 410       93     0.0192 -0.0256  0.0655     0.1366
+       enhance  reward  other     ok 654      128    -0.0687 -0.0990 -0.0435     0.0612
+       enhance  reward target failed 177       91     0.0317 -0.0109  0.0764     0.1356
+       enhance  reward target     ok 299      128    -0.0654 -0.0947 -0.0407     0.0535
+       enhance     phi  other failed 410       93     1.2216  0.0866  2.4794     0.1317
+       enhance     phi  other     ok 654      128    -1.0456 -1.7995 -0.4296     0.0214
+       enhance     phi target failed 177       91     1.4652  0.3022  2.7564     0.1356
+       enhance     phi target     ok 299      128    -0.9375 -1.6929 -0.3320     0.0234
+enhance_target  reward  other failed 410       93     0.0150 -0.0162  0.0477     0.1049
+enhance_target  reward  other     ok 654      128    -0.0447 -0.0624 -0.0264     0.0459
+enhance_target  reward target failed 177       91     0.0439  0.0114  0.0786     0.1412
+enhance_target  reward target     ok 299      128    -0.0366 -0.0525 -0.0207     0.0435
+enhance_target     phi  other failed 410       93     0.7557  0.0238  1.6040     0.1000
+enhance_target     phi  other     ok 654      128    -0.6545 -1.1361 -0.1334     0.0214
+enhance_target     phi target failed 177       91     1.4606  0.5859  2.4320     0.1469
+enhance_target     phi target     ok 299      128    -0.4329 -0.8693 -0.0065     0.0234
+
+  enhance_target on FAILED edits: phi +1.4606 on the lifted region, +0.7557 elsewhere.
+  A gap means the judge is flattered locally; no gap means the lift acts on the whole image.
+
+  figure: results/main8b_2026-10-22/nuis_qwen/analysis/all/reward/exploit_gain.png
+
+=== is the split just reversion to the mean? ===
+  Splitting on the judge's OWN baseline and measuring change from
+  that same baseline is circular. slope -1 = the condition replaces
+  the score with a constant. If resid_* collapse to ~0, the split
+  carried nothing the slope did not.
+  [sc_success] using 10304/13636 rows (3332 missing this readout)
+  presentation readout    n  slope   corr  sd_baseline  sd_condition  raw_failed  raw_ok  resid_failed  resid_ok
+         noimg  reward 1540 -0.915 -0.966        0.374         0.097       0.503  -0.076        -0.013     0.008
+         noimg     phi 1540 -0.841 -0.900       10.766         4.709      13.494  -3.291        -0.297     0.183
+       enhance  reward 1540 -0.159 -0.315        0.374         0.362       0.030  -0.057        -0.010     0.006
+       enhance     phi 1540 -0.108 -0.231       10.766        10.785       1.337  -0.818        -0.037     0.023
+enhance_target  reward 1540 -0.153 -0.335        0.374         0.355       0.036  -0.040        -0.015     0.009
+enhance_target     phi 1540 -0.104 -0.250       10.766        10.576       1.082  -0.561        -0.303     0.187
+
+  noimg: slope -0.915; the failed/ok gap (+0.503 vs -0.076) falls to
+  -0.013 vs +0.008 once one linear term in the baseline is removed. Report this as reversion,
+  not as an exploit, unless a NON-circular split (scripts/judge_agreement.py) agrees.
+
+=== local flattery: target minus other, paired within variant ===
+  enhance is the NEGATIVE CONTROL -- it lifts the whole frame, so it
+  cannot flatter one region. Its contrast is the floor; anything
+  enhance_target does not clear is not local flattery.
+  presentation readout  n_variants  n_bases  target_minus_other  ci_lo  ci_hi  uniform_control
+         noimg  reward         476      150               0.002 -0.002  0.008            False
+         noimg     phi         476      150               0.044 -0.110  0.198            False
+       enhance  reward         476      150               0.004 -0.001  0.010             True
+       enhance     phi         476      150               0.084 -0.061  0.258             True
+enhance_target  reward         476      150               0.009 -0.001  0.019            False
+enhance_target     phi         476      150               0.214 -0.073  0.533            False
+
+=== multiplicity: ~72 intervals in this run, uncorrected ===
+  At 95% and this family size, roughly one null cell is expected to
+  exclude zero by chance. Treat a single exclusion as exploratory;
+  the claims worth making are the ones that survive a non-circular
+  split and are large against the reversion slope.
+
+=== the AES channel: what each condition does to image-level PQ ===
+  AES = min(PQ), so the LOWER of the two rows sets the reward.
+  A lift that raises one and lowers the other has not helped.
+       readout   presentation   n  baseline_mean  condition_mean  mean_gain  frac_rose  frac_fell
+pq_naturalness            box 476         19.574          19.418     -0.155      0.080      0.113
+pq_naturalness        enhance 476         19.574          18.347     -1.227      0.006      0.248
+pq_naturalness enhance_target 476         19.574          18.771     -0.803      0.013      0.166
+pq_naturalness          noimg 476         19.574          18.000     -1.574      0.036      0.366
+pq_naturalness        shuffle 476         19.574          19.511     -0.063      0.006      0.019
+pq_naturalness         subset 476         19.574          19.563     -0.011      0.006      0.008
+  pq_artifacts            box 476         21.410          21.742      0.332      0.218      0.176
+  pq_artifacts        enhance 476         21.410          20.013     -1.397      0.059      0.437
+  pq_artifacts enhance_target 476         21.410          20.422     -0.987      0.053      0.273
+  pq_artifacts          noimg 476         21.410          20.000     -1.410      0.292      0.697
+  pq_artifacts        shuffle 476         21.410          21.282     -0.128      0.021      0.059
+  pq_artifacts         subset 476         21.410          21.389     -0.021      0.036      0.038
+
+wrote results/main8b_2026-10-22/nuis_qwen/analysis/all/reward

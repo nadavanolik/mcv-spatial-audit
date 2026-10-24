@@ -1,0 +1,9 @@
+numpy 1.26.4 cv2 4.11.0 pillow 10.4.0
+PASS test_repeatable
+PASS test_seed_sensitive
+PASS test_order_independent
+PASS test_localized
+PASS test_area_bins_shrink
+
+all determinism guarantees hold
+CROSS-VM FIXTURE HASH: 776feeddd281fa726195bf504c7b19c8

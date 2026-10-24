@@ -80,9 +80,11 @@ judges:
   # question. Bigger truly-independent options (Llama-3.2-11B-Vision, Pixtral-12B)
   # need ~22-24GB in bf16 and do not fit next to a KV cache on an A10.
   #
-  # UNVERIFIED: vLLM support, two-image handling, and whether it honours the
-  # JSON schema. Run scripts/smoke_judge.py against it before trusting anything.
-  # - OpenGVLab/InternVL3-8B
+  # InternVL3-2B ran on the A10s (2026-09-26) and FAILED the perception gate
+  # (scripts/pq_response.py --gate). The 8B ran at --max-dynamic-patch 6,
+  # --max-model-len 8192, --bbox-frame norm1000, and passed the gate
+  # (results/main8b_2026-10-22/).
+  - OpenGVLab/InternVL3-8B
   #
   # Backup family control if InternVL3 disappoints: genuinely non-Qwen lineage
   # (Phi backbone + CLIP ViT-L) and only 4.2B, so it fits easily.

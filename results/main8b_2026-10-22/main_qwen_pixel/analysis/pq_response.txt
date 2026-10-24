@@ -1,0 +1,24 @@
+=== image-level PQ delta: corrupted variant vs its base clean control ===
+(PQ on 0-25; AES = min(naturalness, artifacts), the reward's own term)
+corruption severity   n  d_naturalness  d_artifacts  d_AES  AES_unchanged  AES_dropped  d_AES_lo  d_AES_hi
+      blur        1 476         -0.456       -0.649 -0.569          0.727        0.212    -0.782    -0.377
+      blur        3 476         -1.197       -1.853 -1.544          0.536        0.424    -1.885    -1.227
+      jpeg        1 476         -0.132       -0.061 -0.103          0.824        0.105    -0.256     0.056
+      jpeg        3 476         -1.233       -2.515 -1.782          0.513        0.447    -2.153    -1.460
+     noise        1 476         -0.059       -0.025 -0.084          0.788        0.124    -0.282     0.103
+     noise        3 476         -1.683       -3.809 -2.685          0.353        0.622    -3.109    -2.303
+    remove   binary 952         -1.603       -3.489 -2.535          0.407        0.576    -2.928    -2.150
+  saturate        1 476         -0.179       -0.145 -0.183          0.800        0.118    -0.374    -0.015
+  saturate        3 476         -0.418       -0.664 -0.603          0.708        0.227    -0.835    -0.389
+
+control AES: mean 19.24, between-base SD 3.431
+Read beside stage 4: a monotone AES drop means the judge SEES the
+damage, so a flat per-region localization is about attribution, not
+perception.
+
+=== perception gate (dAES <= -1.0 and CI below 0 on every cell) ===
+  noise 3: dAES -2.685 [-3.109, -2.303]  pass
+  remove binary: dAES -2.535 [-2.928, -2.150]  pass
+  -> PERCEPTION_PASS
+
+wrote results/main8b_2026-10-22/main_qwen_pixel/analysis/pq_response.csv
