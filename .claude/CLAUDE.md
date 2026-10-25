@@ -211,6 +211,15 @@ docs/internal/TEAM_BRIEF.md   teammate status page
 
 ## Current state
 
+> **Read this first.** Only `results/main8b_2026-10-22/` (Qwen3-VL-8B +
+> InternVL3-8B, `--bbox-frame norm1000`) is current, and it supersedes every
+> paragraph below it. The paragraphs from "Stage 1 is done" on are the history
+> of the earlier A10 runs (pixel boxes, InternVL3-2B). Claims there such as
+> "Every localization claim is Qwen3-VL-8B only", "the cross-family
+> localization claim is RETRACTED" and their numbers (AUROC, coherence 28% vs
+> 51%, the nuisance ratios) are **not** the reported ones. Take report numbers
+> from `results/README.md`, not from this section.
+
 **The report is drafted** (`paper/main.tex`, 2026-10-24) and every number in it
 comes from **`results/main8b_2026-10-22/`**: Qwen3-VL-8B and **InternVL3-8B** on
 `main` and on the `nuisance150` controls under all seven presentations, boxes in

@@ -211,7 +211,7 @@ InternVL3-8B & Mild    & 0.506 & 79\% & 78\% & $-0.39$ & $-0.21$ \\
 
 \textbf{The order of the region list moves the score more than damage.} Reordering the list moves $\phi$ 1.60 $[1.23, 2.09]$ (Qwen) and 1.80 $[1.48, 2.22]$ (InternVL) times as much as corrupting the region, averaged over all corruptions and settings; dropping another region from the list, 1.68 and 1.47 times; drawing the boxes on the images, 0.95 and 1.89 times (Appendix~\ref{app:tables}). Random reorderings that happened to keep the original order send identical requests and move at the noise floor (mean $|\Delta\phi|$ 0.30 vs.\ 3.54 for reordered lists, Qwen), so the order itself is the cause.
 
-\textbf{Without the images, failed edits score higher.} With no image, both judges fall back to a high, nearly constant default (mean reward 0.75 and 0.73 against 0.64 and 0.55 with the images; SD 0.09 and 0.13). Edits the judge had scored as failed therefore gain about $+0.45$, and the gain holds when the other judge selects them ($+0.27$ $[0.21, 0.33]$ and $+0.38$ $[0.33, 0.44]$). Cosmetic enhancement gives no gain, globally or inside the target box.
+\textbf{Without the images, failed edits score higher.} With no image, both judges fall back to a high, nearly constant default (mean reward 0.75 and 0.73 against 0.64 and 0.55 with the images; SD 0.09 and 0.13). Edits the judge had scored as failed therefore gain about $+0.45$, and the gain holds when the other judge selects them ($+0.27$ $[0.21, 0.33]$ and $+0.38$ $[0.32, 0.44]$). Cosmetic enhancement gives no gain, globally or inside the target box.
 
 % =========================================================
 % DISCUSSION

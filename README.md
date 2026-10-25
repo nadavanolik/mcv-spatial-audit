@@ -29,17 +29,28 @@ git clone https://github.com/nadavanolik/mcv-spatial-audit.git && cd mcv-spatial
 python -m venv .venv && source .venv/bin/activate   # Python 3.12
 pip install -r requirements.txt
 
-# main run, Qwen3-VL-8B, floor-excluded headline tables
-python -m src.stage4_analyze --scores 'results/main_2026-09-18/scores_shard*.parquet' \
-    --out out/main --all-readouts --min-control 0
+R=results/main8b_2026-10-22
 
-# both judges side by side
-python -m src.stage4_analyze --scores 'results/*/scores_shard*.parquet' \
-    --out out/two_judge --all-readouts --min-control 0
+# main run, floor-excluded headline tables on phi (Table 1, coupling, robustness)
+# main_qwen_norm = Qwen3-VL-8B, main_ivl8 = InternVL3-8B
+for TAG in main_qwen_norm main_ivl8; do
+  python -m src.stage4_analyze --scores "$R/$TAG/scores_shard*.parquet" \
+      --out out/$TAG/phi --col phi --all-readouts --min-control 0 \
+      --overlap-csv $R/checks/overlap.csv
+done
 
-# report figures and the tie-rate table
+# nuisance and exploitability (Table 3), Qwen; nuis_ivl8 + main_ivl8 for InternVL
+python -m scripts.nuisance_report --scores "$R/nuis_qwen/scores_*.parquet" \
+    --damage-scores "$R/main_qwen_norm/scores_shard*.parquet" \
+    --col phi --min-control 0 --out out/nuis_qwen/phi
+
+# Figure 1 (writes to results/figures/)
 python -m scripts.make_figures
 ```
+
+The report is written from `results/main8b_2026-10-22/`; the other folders hold
+earlier runs. The layout-drift split additionally needs `data/bases` (see that
+folder's `REPRODUCE.md`).
 
 Each folder's `REPRODUCE.md` has the full set of commands, including the
 GPU-side runs that produced the parquets.
