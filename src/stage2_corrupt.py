@@ -1,10 +1,8 @@
 """
-Stage 2 — regenerate corrupted variants locally.
+Stage 2: render one shard's corrupted variants.
 
-The corrupted variants are NEVER transferred between VMs and never written to
-the 90G root disk. Each VM regenerates its own shard into /dev/shm (RAM-backed,
-mode 1777, the only large writable surface we have) from:
-    base edits (~300MB, transferred once) + manifest (a few MB)
+Variants are not copied between machines: each one renders its own shard from
+the base edits and the manifest, into /dev/shm (RAM-backed scratch).
 
 Usage:
     python -m src.stage2_corrupt --manifest out/manifest.parquet \
@@ -81,10 +79,7 @@ def main():
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    # /dev/shm competes with the vLLM KV cache for RAM. 440GB total means this
-    # is not tight, but check anyway so a full tmpfs fails loudly and early.
-    # shutil, not os.statvfs: the latter is POSIX-only and this module is also
-    # run on the Windows laptop for CPU-side checks.
+    # Fail early if the scratch space is nearly full (shutil works on Windows).
     free_gb = shutil.disk_usage(out).free / 1e9
     print(f"{out}: {free_gb:.0f}GB free")
     if free_gb < 10:

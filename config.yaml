@@ -1,53 +1,40 @@
-# Design matrix profiles.
+# Design matrix profiles, read by src/build_manifest.py --profile <name>.
 #
-# ARITHMETIC WARNING — check this before you commit to a profile:
-# requests = n_bases x regions_per_base(~4) x variants_per_region x regions_scored(~4)
-# samples  = requests x n_samples
-#
-# The proposal budgeted ~1,000 variants / 10-20k calls. A full cross of
-# 200 bases x 6 corruptions x 3 severities x 2 areas is 24,800 variants and
-# 99,200 requests — 5x over budget, ~6.6h per VM even sharded five ways.
-# Do not run it by accident. `main` below is sized to the proposal.
+# Size: variants = regions x (1 control + corruptions x severities x area_bins);
+# stage 3 sends two requests (SC + PQ) per variant.
 
 pilot:
   n_bases: 5
-  # `remove` is here deliberately. On synthetic squares (2026-08-26) the judge
-  # moved 10 points for `remove` and did not move AT ALL for blur, jpeg or
-  # noise at any severity -- it appears to track semantic change rather than
-  # degradation. A pilot of [none, blur] would therefore have tested only the
-  # corruption we already know is invisible, and returned a flat null that
-  # proved nothing about the pipeline OR the judge.
-  # blur stays as the contrast: photometric damage that should NOT move it.
   corruptions: [none, blur, remove]
   severities: [1, 3]
   area_bins: [full]
-  # ~80 variants -> ~160 requests. Runs in minutes. Validates the judge.
+  # ~80 variants, a few minutes of judging.
 
 main:
-  # 150, not 100 (decided 2026-09-04). The extra 50 cost 2.7h on the editor VM
-  # and ~0.6h/VM in stage 3, and buy intervals ~18% tighter. They stop being
-  # free at ~200, where stage 1 no longer fits one night.
+  # The reported design: 150 photos, 476 regions, 11 variants per region
+  # (1 control + 5 corruptions x 2 severities) = 5,236 variants.
   n_bases: 150
   corruptions: [none, blur, saturate, noise, jpeg, remove]
-  severities: [1, 3]          # skip mid severity; keeps the effect-size ladder
+  severities: [1, 3]
   area_bins: [full]
-  # 11 variants per region (1 control + 5 corruptions x 2 severities), 2
-  # requests each (SC + PQ). MEASURED 2026-09-04 on train2017 under the
-  # uniqueness rule: stage 0 printed regions/base 3.17 for 150 bases, so 476
-  # regions -> ~5,230 variants -> ~10,460 requests -> ~2,090/VM -> ~1.65h/VM
-  # at greedy. On budget.
-  # The old estimate here used 3.19, from val2017 BEFORE the uniqueness rule.
-  # The rule cost 75% of the IMAGES and ~nothing per surviving image: a photo
-  # qualifies whole or not at all. These numbers scale linearly with the figure
-  # stage 0 prints, so re-read it if the filter ever changes again.
+
+nuisance150:
+  # The 476 clean edits only, for the nuisance and exploitability conditions
+  # (stage 3 --presentation). Their variant ids match `main`'s controls.
+  # severities/area_bins are unused for `none` but required.
+  n_bases: 150
+  corruptions: [none]
+  severities: [1, 3]
+  area_bins: [full]
 
 full_cross:
+  # 24,800 variants / 99,200 requests. Not run.
   n_bases: 200
   corruptions: [none, blur, saturate, noise, jpeg, remove]
   severities: [1, 2, 3]
   area_bins: [full, half]
-  # 24,800 variants -> 99,200 requests -> ~6.6h/VM. Only if `main` finishes early.
 
+# Photo and region selection, read by src/stage0_coco.py.
 selection:
   min_regions: 3
   max_regions: 5
@@ -55,57 +42,10 @@ selection:
   max_area_frac: 0.25
   duplicate_area_frac: 0.01
 
+# The judges in the report (for reference; pass one with stage 3 --model).
+#   Qwen3-VL-8B-Instruct is the base model of SpatialFlow-GRPO's reward model.
+#   InternVL3-8B has its own vision encoder; it ran with --max-dynamic-patch 6
+#   --max-model-len 8192. Both used --bbox-frame norm1000.
 judges:
-  # PRIMARY. Not chosen for speed or size -- SFReward IS Qwen3-VL-8B-Instruct
-  # fine-tuned on SFReward-14K, so this is the exact base model the paper built
-  # its reward model from. Auditing A.4.3's prompt on any other backbone would
-  # confound "the protocol does not localise" with "this model does not".
   - Qwen/Qwen3-VL-8B-Instruct
-
-  # SCALE CONTROL, same family. Answers "is this about capacity?" -- if 4B and
-  # 8B fail identically, the failure is not something a bigger model fixes.
-  # Nearly free: already downloaded, and measured at the same speed as the 8B
-  # (its 26x concurrency advantage turned out not to matter).
-  - Qwen/Qwen3-VL-4B-Instruct
-
-  # FAMILY CONTROL. This is the one that decides whether the finding is about
-  # the PROTOCOL or about Qwen. Two Qwen sizes share pretraining data, tokenizer
-  # and vision encoder, so they can fail the same way for reasons that say
-  # nothing about region-level reward in general.
-  #
-  # Caveat to state in the report: a genuinely independent lineage is hard to
-  # find at this size. Many open VLMs that look like different families use a
-  # Qwen LLM backbone (InternVL3 included); InternVL3 at least brings its own
-  # InternViT vision encoder, which is the half that matters most for a spatial
-  # question. Bigger truly-independent options (Llama-3.2-11B-Vision, Pixtral-12B)
-  # need ~22-24GB in bf16 and do not fit next to a KV cache on an A10.
-  #
-  # InternVL3-2B ran on the A10s (2026-09-26) and FAILED the perception gate
-  # (scripts/pq_response.py --gate). The 8B ran at --max-dynamic-patch 6,
-  # --max-model-len 8192, --bbox-frame norm1000, and passed the gate
-  # (results/main8b_2026-10-22/).
   - OpenGVLab/InternVL3-8B
-  #
-  # Backup family control if InternVL3 disappoints: genuinely non-Qwen lineage
-  # (Phi backbone + CLIP ViT-L) and only 4.2B, so it fits easily.
-  # - microsoft/Phi-3.5-vision-instruct
-
-sampling:
-  n_samples: 5        # vLLM n=, shares the prefill across samples
-  temperature: 0.7
-
-nuisance150:
-  # Exploitability at reportable n (added 2026-09-28). Clean controls only:
-  # the exploit scenario is an edit that already went wrong, with no corruption
-  # added, and the question is whether a change that fixes nothing raises its
-  # score. 150 bases -> 476 controls -> 952 requests per presentation.
-  #
-  # Controls carry variant_id(base, region, "none", 0, "full"), identical to
-  # `main`'s controls, so these rows are the same images `main` already judged.
-  #
-  # severities/area_bins are inert here -- build_manifest only reads them for
-  # non-`none` corruptions -- but the keys are required.
-  n_bases: 150
-  corruptions: [none]
-  severities: [1, 3]
-  area_bins: [full]

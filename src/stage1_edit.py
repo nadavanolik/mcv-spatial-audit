@@ -1,41 +1,14 @@
 """
-Stage 1 - generate the base edits. Runs ONCE, on the editor VM only.
+Stage 1: edit each base photo with FLUX.1 Kontext. Runs once, on one GPU.
 
-Two properties make this stage different from every other:
+Uses sequential CPU offload: the 23.8GB transformer does not fit in the A10's
+~21.4GiB of free memory as one piece. Diffusion output is not reproducible
+across library versions even at a fixed seed, so the edits are generated once
+and published, and every run writes data/bases/stage1_provenance.json with the
+model revision and library versions.
 
-1. Latency-insensitive. ~200 images, one time. So CPU offload is entirely
-   acceptable: we have 440GB of RAM to stage weights in and only need this to
-   finish overnight, once.
-
-   It must be SEQUENTIAL offload, not model-level. FLUX Kontext's transformer
-   is 23.8GB in bf16 and an A10-24Q leaves only ~21.37GiB free, so
-   `enable_model_cpu_offload` - which makes one whole component resident -
-   OOMs before step 1 of 28. Confirmed on mcvgpu2025s-0050, 2026-08-26.
-   `enable_sequential_cpu_offload` streams submodules and fits; it is much
-   slower per image, so measure with scripts/smoke_edit.py before fixing the
-   base count.
-
-2. NOT reproducible from a seed. Diffusion sampling drifts across library
-   versions, attention backends and kernel selection even at fixed seed. So
-   unlike stage 2, the output here is an IMMUTABLE ARTEFACT: generate once,
-   tar it, ship it, and treat that tarball as ground truth - including for the
-   reproducibility claim in the report. Do not regenerate it per-VM.
-
-   Because it cannot be reproduced, it must be *described*: every run writes
-   `data/bases/stage1_provenance.json` with the model revision and the library
-   versions that produced the edits. That file is the reproducibility claim.
-
-TEST IT BEFORE YOU DOWNLOAD 34GB:
-
-    python -m src.stage1_edit --preflight
-
-checks the pipeline class name, its call signature, the offload API, HF auth,
-gated-repo access, free disk, and whether the largest component can fit the
-offload mode you asked for - all without fetching a single weight. Then:
-
-    python -m scripts.smoke_edit
-
-does one real edit on a synthetic image and reports s/image and peak VRAM.
+    python -m src.stage1_edit --preflight   # checks everything, downloads nothing
+    python -m scripts.smoke_edit            # one real edit on a synthetic image
 
 After this runs:
     cp out/edit_drift.csv data/bases/          # if it has been computed
@@ -43,7 +16,6 @@ After this runs:
     python -c "from huggingface_hub import HfApi; HfApi().upload_file(
         path_or_fileobj='bases.tar.gz', path_in_repo='bases.tar.gz',
         repo_id='mcv-spatial-audit/mcv-spatial-audit', repo_type='dataset')"
-    # 146MB for 150 bases. The only large transfer in the entire project.
 """
 from __future__ import annotations
 
@@ -58,31 +30,20 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
-# torch is NOT imported at module scope. --preflight's input checks (bases.json,
-# source.png, instructions, resolution vs --max-side) are pure CPU and are
-# precisely what you want to run on the laptop BEFORE pushing to the editor VM.
-# A top-level torch import made that impossible, which defeated the point --
-# same reasoning as stage3_judge's --dry-run not importing vLLM.
+# torch is imported inside functions so --preflight's input checks run on a
+# machine without it.
 
 MODEL_ID = "black-forest-labs/FLUX.1-Kontext-dev"
 
-# FLUX.1-Kontext-dev is ~34GB on the Hub: the transformer is ~23.8GB in bf16
-# (12B params), T5-XXL another ~9.5GB, plus CLIP and the VAE. The xet chunk
-# cache adds a few GB of transient overhead during the transfer, so ~40GB is
-# the real peak. 45 leaves working room without blocking a machine that would
-# actually have fitted it - the previous 60 was padding on a guess, and it
-# failed a VM with 59GB free that had ~25GB to spare.
+# FLUX.1-Kontext-dev is ~34GB on the Hub; the download needs ~40GB at peak.
 MODEL_GB = 34
 NEED_GB = 45
 
 
 def driver_cuda_version() -> str | None:
-    """The maximum CUDA version this machine's driver supports, per nvidia-smi.
+    """The highest CUDA version the driver supports, per nvidia-smi.
 
-    torch reports the CUDA it was BUILT against; the driver caps what it can
-    actually run. When a cu13 wheel lands on a 12.x driver, torch simply says
-    `cuda.is_available() is False` and buries the reason in a UserWarning, so
-    the preflight reads as "no GPU" on a machine with a perfectly good A10.
+    Used to explain a torch build that is newer than the driver allows.
     """
     import re
     import subprocess
@@ -98,23 +59,9 @@ def driver_cuda_version() -> str | None:
 def load_editor(model_id: str, offload: str = "sequential"):
     """Load FLUX Kontext under CPU offload.
 
-    OFFLOAD MODE IS NOT A TUNING KNOB ON THIS HARDWARE - it decides whether the
-    thing runs at all.
-
-    `enable_model_cpu_offload` moves one whole COMPONENT to the GPU at a time.
-    FLUX Kontext's transformer is 11.9B params in bf16 = 23.8GB, and the
-    A10-24Q reports 23.72GiB total with only ~21.37GiB free (the vGPU layer
-    keeps ~2.4GiB permanently). 23.8 > 21.37, so model-level offload OOMs while
-    moving the transformer in, before step 1 of 28. Nothing else is on the card;
-    freeing disk or unloading a judge does not change this.
-
-    `enable_sequential_cpu_offload` moves individual SUBMODULES instead, so the
-    resident set is a few layers rather than the whole transformer. It fits with
-    room to spare. It is much slower - every forward pass streams weights over
-    PCIe, every step, so expect minutes per image rather than seconds - but
-    stage 1 runs once, over ~200 images, and we have 440GB of RAM to stage it
-    in. Measure the real number with scripts/smoke_edit.py before committing to
-    a base count.
+    "model" offload moves one whole component to the GPU at a time and does
+    not fit the transformer on an A10; "sequential" streams submodules and
+    fits, at a few minutes per image.
     """
     import torch
     from diffusers import FluxKontextPipeline
@@ -130,12 +77,7 @@ def load_editor(model_id: str, offload: str = "sequential"):
 
 
 def largest_component_gb(model_id: str) -> tuple[float, str]:
-    """Size of the biggest single pipeline component, from the Hub metadata.
-
-    No download: `model_info(files_metadata=True)` returns per-file sizes. This
-    is what tells us whether model-level offload can work BEFORE we spend six
-    minutes fetching 34GB and then OOM on the first step.
-    """
+    """Size of the biggest pipeline component, from Hub metadata (no download)."""
     from collections import defaultdict
     from huggingface_hub import HfApi
     info = HfApi().model_info(model_id, files_metadata=True)
@@ -150,9 +92,8 @@ def largest_component_gb(model_id: str) -> tuple[float, str]:
 
 
 def _enable_vae_slicing(pipe) -> str:
-    """diffusers moved this from the pipeline onto the VAE. Take whichever
-    exists and say which, rather than crashing on one version or silently
-    skipping the memory saving on the other."""
+    """Enable VAE slicing on the pipeline or the VAE, whichever this diffusers
+    version supports, and say which."""
     if hasattr(pipe, "enable_vae_slicing"):
         pipe.enable_vae_slicing()
         return "pipe.enable_vae_slicing()"
@@ -170,15 +111,8 @@ def _sha(text: str) -> str:
 def edit_state(root: Path, spec: dict) -> str:
     """"fresh" | "stale" | "missing" for one base's edit.png.
 
-    "stale" means an edit exists but was generated from a different
-    instruction. That happens whenever stage 0 is re-run with changed
-    templates: it overwrites regions.json and instruction.txt in place and
-    leaves edit.png alone. The result is an edited image paired with an
-    instruction it never saw - which produces plausible-looking scores that
-    mean nothing, and which no downstream stage can detect.
-
-    An edit with no edit.json predates this fingerprint and cannot be
-    verified, so it is treated as stale rather than trusted.
+    "stale": the edit was made from a different instruction than the current
+    one, or has no edit.json to say which.
     """
     d = root / spec["base_id"]
     if not (d / "edit.png").exists():
@@ -194,9 +128,7 @@ def edit_state(root: Path, spec: dict) -> str:
 
 
 def provenance(model_id: str, a) -> dict:
-    """What it would take to explain these bytes to a reviewer. Diffusion
-    output is not seed-reproducible across versions, so this is the closest
-    thing to a hash the artefact can have."""
+    """Model revision, settings and library versions behind the edits."""
     import diffusers
     import torch
     import transformers
@@ -221,12 +153,7 @@ def provenance(model_id: str, a) -> dict:
 
 
 def preflight(root: Path, model_id: str, a) -> int:
-    """Everything that can fail, checked before anything is downloaded.
-
-    Deliberately mirrors stage3_judge's --dry-run: the expensive, gated,
-    hardware-bound part of the stage should be the LAST thing that can go
-    wrong, not the first.
-    """
+    """Check the API, GPU, HF access, disk and inputs before downloading."""
     print("=== PREFLIGHT: no weights are fetched ===")
     problems: list[str] = []
 
@@ -247,10 +174,6 @@ def preflight(root: Path, model_id: str, a) -> int:
         if extra:
             print(f"  note __call__ also accepts {extra} - Kontext may resize "
                   f"internally; we resize the output back to source size.")
-        # Check the API this run will actually call. Checking only
-        # enable_model_cpu_offload leaves the default mode -- sequential, the
-        # only one that fits -- unverified, so a missing or renamed sequential
-        # offload would surface after the 34GB download instead of before it.
         api = f"enable_{a.offload}_cpu_offload"
         if not hasattr(FluxKontextPipeline, api):
             problems.append(f"no {api}")
@@ -284,9 +207,6 @@ def preflight(root: Path, model_id: str, a) -> int:
         print(f"       torch {torch.__version__} was built for CUDA {built}; "
               f"this driver supports CUDA {drv or 'unknown'}")
         if drv and built and int(built.split(".")[0]) > int(drv.split(".")[0]):
-            # pip resolves diffusers/accelerate's bare `torch>=2.0.0` to the
-            # newest wheel, which is now a cu13 build. There is no sudo here to
-            # move the driver, so the wheel has to move instead.
             tag = "cu" + drv.replace(".", "")
             problems.append(
                 f"torch is built for CUDA {built} but the driver caps at {drv}")
@@ -300,9 +220,7 @@ def preflight(root: Path, model_id: str, a) -> int:
             problems.append("no CUDA device")
 
     print("\n--- 3. HF auth and gated-repo access ---")
-    # FLUX.1-Kontext-dev is gated: the licence must be accepted by the account
-    # whose token this is. That failure otherwise appears only after the
-    # download starts, and reads as a 403 with no explanation.
+    # FLUX.1-Kontext-dev is gated: the token's account must accept the licence.
     try:
         from huggingface_hub import HfApi
         api = HfApi()
@@ -312,11 +230,7 @@ def preflight(root: Path, model_id: str, a) -> int:
             info = api.model_info(model_id)
             print(f"  OK   {model_id} accessible, revision {info.sha[:12]}")
 
-            # THE CHECK THAT MATTERS, and the one whose absence let a
-            # structurally impossible run download 34GB and then OOM on step 0.
-            # Model-level offload needs the LARGEST single component resident,
-            # not the average one. FLUX Kontext's transformer is 23.8GB in bf16
-            # against 21.37GiB free on an A10-24Q.
+            # Model-level offload needs the largest component resident at once.
             gb, comp = largest_component_gb(model_id)
             if gb:
                 print(f"  note largest component is {comp}/ at {gb:.1f}GiB")
@@ -346,8 +260,6 @@ def preflight(root: Path, model_id: str, a) -> int:
     except Exception as e:
         problems.append(f"not logged in to HF: {type(e).__name__}")
         print(f"  FAIL {type(e).__name__}: {str(e)[:200]}")
-        # `huggingface-cli login` was renamed; recent hub versions want
-        # `hf auth login` and only mention the new spelling in the error.
         print("       Run: hf auth login   (older hub: huggingface-cli login)")
 
     print("\n--- 4. disk for the weights ---")
@@ -358,11 +270,8 @@ def preflight(root: Path, model_id: str, a) -> int:
         probe = probe.parent
     free_gb = shutil.disk_usage(probe).free / 2**30
 
-    # Already-cached weights need no transfer, so the download budget does not
-    # apply. Without this the check fails the moment the model is in place --
-    # exactly when the run is finally ready to go -- and demands 45GB to fetch
-    # something already on disk. Count blobs only: the snapshot/ tree is
-    # symlinks into blobs/ and following them double-counts every file.
+    # Cached weights need no download. Count real files only: the snapshot
+    # tree is symlinks into blobs/.
     repo_dir = hf_home / "hub" / ("models--" + model_id.replace("/", "--"))
     cached_gb = 0.0
     if repo_dir.exists():
@@ -386,10 +295,7 @@ def preflight(root: Path, model_id: str, a) -> int:
         print("       This VM is role-specialised: it must NOT also hold a "
               "judge checkpoint. Clear ~/hf_cache of any Qwen weights.")
 
-    # Stage-0 inputs are tracked separately: they block the real stage-1 run
-    # but NOT scripts/smoke_edit.py, which builds its own synthetic image. One
-    # undifferentiated failure list would send you off to fetch COCO before you
-    # have any evidence the editor loads at all.
+    # Stage-0 inputs block the real run but not scripts/smoke_edit.py.
     inputs: list[str] = []
     print("\n--- 5. inputs from stage 0 (not needed for smoke_edit) ---")
     bj = root / "bases.json"
@@ -410,10 +316,6 @@ def preflight(root: Path, model_id: str, a) -> int:
         print(f"       {n_fresh} already edited and up to date; "
               f"{states.count('missing')} never edited")
         if n_stale:
-            # Not a blocker: stage 1 re-edits these automatically. It is called
-            # out because it means stage 0 was re-run with changed
-            # instructions, and anyone who copied data/bases elsewhere in the
-            # meantime is holding edits that no longer match their prompts.
             print(f"  WARN {n_stale} edit.png are STALE - generated from a "
                   f"different instruction")
             print(f"       (or predate edit.json). Stage 1 will regenerate "
@@ -436,9 +338,6 @@ def preflight(root: Path, model_id: str, a) -> int:
             print(f"    instruction: {s0['instruction']}")
             print(f"    regions:     {len(s0['regions'])}")
             if max(im.size) > a.max_side:
-                # Not an alignment risk: the edit is resized back to the source
-                # size before it is saved, so stage 0's masks still index it
-                # correctly. What a low --max-side costs is detail.
                 print(f"    note source exceeds --max-side {a.max_side}; it "
                       f"will be edited smaller and resized back to "
                       f"{im.size[0]}x{im.size[1]}, so masks stay aligned but "
@@ -518,12 +417,8 @@ def main():
 
     pipe = load_editor(a.model, offload=a.offload)
 
-    # Written BEFORE the loop and refreshed after every image. 150 bases at
-    # ~191s is an eight-hour run, and writing this only at the end meant any
-    # interrupt left the artefact with no provenance at all - which is the
-    # whole reproducibility claim for a stage that cannot be re-derived from a
-    # seed. n_edited counts THIS run, not the directory: a resumed run edits
-    # only what was missing or stale.
+    # Written before the loop and after every image, so an interrupted run
+    # still has provenance. n_edited counts this run only.
     prov_path = root / "stage1_provenance.json"
     prov = provenance(a.model, a)
     prov["n_bases"] = len(specs)
@@ -546,18 +441,10 @@ def main():
             generator=torch.Generator("cpu").manual_seed(0),
         ).images[0]
 
-        # Masks were computed at SOURCE resolution and stage 2 indexes them
-        # straight into edit.png, so the edit must come back at exactly the
-        # source's size - not the thumbnailed size, and not whatever internal
-        # resolution Kontext chose. Misalignment here corrupts the wrong pixels
-        # and silently invalidates every downstream number.
+        # Back to the exact source size, so the source-resolution masks align.
         out = out.resize(before, Image.LANCZOS)
         out.save(d / "edit.png")
-        # Fingerprint the instruction this edit was actually made from. Stage 0
-        # rewrites regions.json and instruction.txt in place but never deletes
-        # edit.png, so a re-run of stage 0 with changed instructions leaves
-        # every existing edit silently mismatched against the instruction the
-        # judge will be shown. Nothing downstream could detect that.
+        # Record which instruction this edit was made from (see edit_state).
         (d / "edit.json").write_text(json.dumps({
             "instruction": s["instruction"],
             "instruction_sha": _sha(s["instruction"]),

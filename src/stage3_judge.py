@@ -1,15 +1,9 @@
 """
-Stage 3 — the hot loop. Batched VLM judging via vLLM.
+Stage 3: VLM judging with vLLM, two schema-constrained requests per variant.
 
-Config tuned for a full A10 24GB (SM 8.6, Ampere):
-  - bf16, NOT fp8: fp8 kernels need SM 8.9+, so the official FP8 checkpoint
-    buys us nothing here.
-  - --max-model-len 4096: Qwen3-VL defaults to a 256k context and will refuse
-    to allocate a KV cache that large next to 16.6GiB of weights.
-  - gpu_memory_utilization has a NARROW workable window on this card, roughly
-    (0.87, 0.90). See DEFAULT_GPU_UTIL below; both ends fail.
-  - max_pixels capped: Qwen3-VL tokenizes by area, so an uncapped 2000px image
-    becomes thousands of vision tokens and per-call latency explodes.
+Configured for an A10 24GB (SM 8.6): bf16 (fp8 kernels need SM 8.9+), a 4096
+context, a capped image size, and a narrow gpu_memory_utilization window (see
+DEFAULT_GPU_UTIL).
 
 Usage:
     python -m src.stage3_judge --manifest out/manifest.parquet \
@@ -34,57 +28,28 @@ from .presentation import (PRESENTATIONS, TEXT_AXES, present, enhance,
                            enhance_region, draw_boxes)
 from .schema import shard
 
-# 768^2 = 589,824. Chosen to be a no-op on our actual data while shrinking the
-# worst case vLLM profiles against: stage 0 writes COCO images at native size
-# (typically 640x480 ~ 307k px) and stage1_edit resizes each edit back to
-# src.size, so nothing we judge exceeds ~410k px. Nothing is downscaled — but
-# vLLM profiles the encoder cache at max_pixels regardless of what we send, and
-# at 1024^2 that overhead left the KV cache at -0.40 GiB on the A10.
+# Qwen3-VL pixel budget. Larger than any image we send (~410k px), but vLLM
+# sizes the encoder cache from this cap, so a bigger one costs KV-cache memory.
 MAX_PIXELS = 768 * 768
 MIN_PIXELS = 256 * 256
 
 
-# 0.89. This is squeezed between two failures, not chosen for headroom.
-#
-#   TOO HIGH: vLLM budgets gpu_memory_utilization as a fraction of TOTAL memory
-#   but refuses to start unless that much is FREE. The A10-24Q reports 23.72GiB
-#   total and only ~21.37GiB free (the vGPU layer keeps ~2.4GiB permanently),
-#   so anything above ~0.901 dies before loading a weight.
-#
-#   TOO LOW: weights (16.64GiB) plus the encoder cache and activation peak come
-#   to ~20.41GiB. Below ~0.861 the budget does not cover them and the KV cache
-#   is sized NEGATIVE -- vLLM then raises "No available memory for the cache
-#   blocks. Try increasing gpu_memory_utilization", which is accurate but reads
-#   like a request to raise a value you already lowered on purpose.
-#
-# Measured on mcvgpu2025s-0050: util 0.85 -> KV -0.25GiB (dies);
-# 0.87 -> +0.23GiB; 0.89 -> +0.70GiB (5,072 tokens, max concurrency 1.24x).
-# The workable window is (0.8605, 0.9009) and 0.89 sits near its top while
-# staying clear of the free-memory ceiling.
-#
-# This default was 0.85 and had never actually been run: every smoke test
-# passed --gpu-util 0.89 explicitly, so the first command that relied on the
-# default was the first one to fail.
-#
-# All five VMs must use the SAME value. It sizes the KV cache, which changes
-# batch composition, which can perturb logits at the numerical margins. Scores
-# from differently-configured shards are not cleanly comparable.
+# The A10-24Q reports 23.72GiB but leaves ~21.37GiB free. Above ~0.90 vLLM
+# refuses to start (budget > free memory); below ~0.86 the 16.6GiB of weights
+# plus activations leave a negative KV cache. 0.89 gives a 0.70GiB cache.
+# Every shard must use the same value: it changes batching and therefore logits.
 DEFAULT_GPU_UTIL = 0.89
 GPU_UTIL_FLOOR = 0.87        # below this the KV cache goes negative on an A10
 
 
 # InternVL tiles each image into up to this many 448px crops plus a thumbnail,
-# 256 tokens each. 2 is what the A10 runs of InternVL3-2B used (commit b780aa9,
-# cut from 6 to fit the card). The InternVL3-8B runs used 6 tiles at
-# --max-model-len 8192: 2 images x 7 x 256 = 3,584 image tokens. Every
-# per-image item stays under max_num_batched_tokens=2048 up to 7 tiles.
+# 256 tokens each. InternVL3-8B ran with 6 at --max-model-len 8192.
 DEFAULT_MAX_DYNAMIC_PATCH = 2
 
 
 def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL,
                 tiles: int = DEFAULT_MAX_DYNAMIC_PATCH):
-    # vLLM's own message for this reports the shortfall but not the fix, and it
-    # arrives after a model download. Check first and say what to pass.
+    # Check free memory before the model download, and say which value to pass.
     try:
         import torch
         free, total = torch.cuda.mem_get_info()
@@ -113,16 +78,9 @@ def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL,
     try:
         return _build_engine(model, max_len, util, tiles)
     except (RuntimeError, ValueError) as e:
-        # The engine runs in a CHILD process, so any startup failure reaches us
-        # as the same generic "Engine core initialization failed" -- the real
-        # cause is only in the child's traceback above. This handler once
-        # reported a KV-cache problem for a disk-full OSError during a weight
-        # download, sending the reader after GPU memory for a storage bug.
-        #
-        # So: name the KV cause only when the child's own words are present.
-        # vLLM's message there says "try increasing gpu_memory_utilization",
-        # which is correct but sounds like advice to raise a value you lowered
-        # deliberately -- hence spelling out the direction and the numbers.
+        # The engine starts in a child process, so every startup failure arrives
+        # as the same generic error. Name the KV-cache cause only when vLLM's own
+        # message says so.
         msg = str(e)
         if "cache blocks" in msg or "No available memory" in msg:
             raise SystemExit(
@@ -154,18 +112,11 @@ def load_engine(model: str, max_len: int = 4096, util: float = DEFAULT_GPU_UTIL,
 
 
 def _whitespace_kwargs() -> dict:
-    """Forbid arbitrary whitespace in grammar-constrained output.
+    """Engine kwargs that forbid free whitespace in constrained output.
 
-    vLLM defaults StructuredOutputsConfig(disable_any_whitespace=False), and
-    unrestricted whitespace is ALWAYS grammar-valid -- so a constrained model
-    can emit newlines and indentation indefinitely without ever violating the
-    schema. On the first schema-constrained run every SC response ran to the
-    full 1536-token cap while containing barely 100 tokens of actual JSON, with
-    stray commas sitting on their own indented lines. Compact output removes
-    the escape hatch.
-
-    The option was renamed across versions, so pick by what EngineArgs
-    actually has rather than guessing.
+    Whitespace is always grammar-valid, so without this a constrained model can
+    pad its JSON with indentation until it hits max_tokens. The option's name
+    differs across vLLM versions, so it is picked from EngineArgs' fields.
     """
     try:
         from vllm.engine.arg_utils import EngineArgs
@@ -176,11 +127,7 @@ def _whitespace_kwargs() -> dict:
         got = getattr(EngineArgs, attr, None)
         if got:
             names |= set(got)
-    # The backend must be named explicitly. vLLM defaults to backend="auto" and
-    # then REFUSES the option: "disable_any_whitespace is only supported for
-    # xgrammar and guidance backends". auto resolves to xgrammar here anyway
-    # (its nanobind objects show up in the shutdown log), so pinning it changes
-    # nothing except making the option legal to pass.
+    # vLLM accepts the option only with an explicit xgrammar or guidance backend.
     if "structured_outputs_config" in names:
         return {"structured_outputs_config": {
             "backend": "xgrammar", "disable_any_whitespace": True}}
@@ -195,9 +142,7 @@ def _whitespace_kwargs() -> dict:
 def _mm_args(model: str, tiles: int = DEFAULT_MAX_DYNAMIC_PATCH) -> tuple[dict, dict]:
     """(limit_mm_per_prompt, mm_processor_kwargs) for this model family.
 
-    One definition, read by both _build_engine and dry_run, so the dry run can
-    never advertise a config the engine would not use -- the failure mode this
-    file has already had twice with sampling params.
+    Shared by _build_engine and dry_run so the dry run reports the real config.
     """
     lower = model.lower()
     if "qwen" in lower:
@@ -214,23 +159,13 @@ def _build_engine(model: str, max_len: int, util: float, tiles: int):
     if ws:
         print(f"grammar whitespace: disabled via {list(ws)[0]}")
 
-    # Both multimodal arguments below are family-specific. The "video": 0 limit
-    # and the pixel budget are Qwen3-VL's; another family needs neither, and a
-    # processor kwarg its processor does not accept is a startup error.
     mm_limits, mm_kwargs = _mm_args(model, tiles)
 
-    # InternVL ships its own modeling code and vLLM refuses to load it without
-    # this. It means executing Python from the model repo, which is why it is
-    # gated rather than global: the Qwen main-run path keeps vLLM's own default
-    # (False), so nothing about that configuration changes.
+    # InternVL ships its own modeling code; Qwen keeps vLLM's default (False).
     trust = "qwen" not in model.lower()
 
-    # Sampler warmup profiles max_num_seqs dummy requests at once, and the
-    # default (hundreds) OOMs an A10 on a non-Qwen backbone. Spread as a dict so
-    # Qwen passes NOTHING and keeps vLLM's own default, leaving the main-run
-    # configuration untouched. Caps concurrency only: under greedy decoding
-    # (temperature 0, n=1) no output changes, and this judge is effectively
-    # serial anyway at a 5,072-token KV cache.
+    # Sampler warmup at vLLM's default max_num_seqs OOMs the A10 on non-Qwen
+    # backbones. Under greedy decoding this cap changes no output.
     seqs = {} if not trust else {"max_num_seqs": 32}
 
     def _make(extra: dict):
@@ -239,33 +174,22 @@ def _build_engine(model: str, max_len: int, util: float, tiles: int):
             dtype="bfloat16",
             max_model_len=max_len,
             gpu_memory_utilization=util,
-            # "video": 0 is load-bearing, not tidiness. Qwen3-VL accepts video, and
-            # if the limit is left unset vLLM sizes the encoder cache for a
-            # maximum-length video and profiles with one — a 151250-token budget and
-            # a 4.62GiB allocation on top of 16.8GiB of weights, which OOMs the A10
-            # during profile_run before a single request is served. We only ever
-            # send two images.
+            # Qwen3-VL needs "video": 0, or vLLM sizes the encoder cache for a
+            # maximum-length video and runs out of memory at startup.
             limit_mm_per_prompt=mm_limits,
             mm_processor_kwargs=mm_kwargs,
             trust_remote_code=trust,
-            # Cap the prefill chunk. vLLM defaults this to max_model_len and sizes
-            # the profiling activation peak from it; our prompts are ~1,750 tokens
-            # (2 images ~750 each + ~250 of text), so 4096 is ample headroom and
-            # halves the peak that was pushing the KV cache negative.
+            # Prompts are ~1,750 tokens; a smaller prefill chunk lowers the
+            # activation peak that vLLM reserves memory for.
             max_num_batched_tokens=2048,
-            # Eager, not CUDA graphs. Graph capture reserves memory this card does
-            # not have to spare, and it costs ~37s of torch.compile at every engine
-            # start. The throughput it buys is almost all on the decode side, and
-            # our outputs are ~15-32 tokens against a multi-image prefill — so
-            # prefill dominates and eager costs us very little here.
+            # CUDA graphs need memory this card does not have, and outputs are
+            # short, so eager mode costs little.
             enforce_eager=True,
             **seqs,
             **extra,
         )
 
-    # A rejected whitespace option must not cost a 4-minute model load and a
-    # traceback. Retry once without it and say so -- an unconstrained-whitespace
-    # run still produces data, it just wastes tokens on indentation.
+    # If this vLLM rejects the whitespace option, retry once without it.
     try:
         return _make(ws)
     except ValueError as e:
@@ -280,32 +204,19 @@ def _build_engine(model: str, max_len: int, util: float, tiles: int):
 def build_requests(rows: pd.DataFrame, bases: Path, variants: Path,
                    presentation: str = "baseline",
                    bbox_frame: str = "pixel") -> tuple[list, list]:
-    """Two requests per variant, following A.4.3 / A.4.4:
+    """Two requests per variant (SpatialFlow-GRPO A.4.3 / A.4.4):
 
-      SC  source + edited, scoring EVERY region at once (plus background and
-          overall) in one structured response.
-      PQ  the edited image alone, giving the image-level [naturalness,
-          artifacts] that Equation (3) needs.
+      SC  source + edit, scoring every region (plus background and overall)
+          in one structured response.
+      PQ  the edit alone, giving the image-level [naturalness, artifacts].
 
-    This is the protocol's own shape, not ours. The published prompt hands the
-    judge all regions together and asks it to score them separately, so
-    cross-region leakage shows up the way the paper's judge would exhibit it
-    rather than as an artefact of how we sliced requests. It also happens to be
-    cheaper: 2 requests per variant instead of one per region.
+    `presentation` re-packages both requests in memory for the nuisance and
+    exploitability analyses (src/presentation.py); "baseline" leaves them as
+    is. PQ is sent under every presentation so `reward` is always available.
 
-    `presentation` re-packages those same two requests for the nuisance and
-    exploitability analyses (see src/presentation.py). The images on disk are
-    never touched: any pixel change happens in memory, here, so no manifest
-    column and no re-render is involved. "baseline" is the identity.
-
-    PQ is re-sent under every presentation, including the text-only axes where
-    the edited image is unchanged. That costs 50% more requests than skipping
-    it, and buys a populated `reward` column under every condition so the
-    tables read directly against the main run's.
-
-    `bbox_frame` is the coordinate frame of the region boxes written into the
-    SC prompt (judge_prompt.BBOX_FRAMES). norm1000 scales by the SOURCE size;
-    stage 1 resizes every edit back to it, so both images share that frame.
+    `bbox_frame` is the coordinate frame of the boxes in the SC prompt
+    (judge_prompt.BBOX_FRAMES). norm1000 scales by the source size, which every
+    edit shares.
     """
     msgs, meta = [], []
     for row in rows.itertuples():
@@ -351,12 +262,9 @@ def build_requests(rows: pd.DataFrame, bases: Path, variants: Path,
 
 
 def structured_kind() -> str | None:
-    """Which structured-output API the installed vLLM exposes, or None.
+    """Which structured-output API this vLLM exposes, or None.
 
-    vLLM renamed this: `guided_decoding` (older) became `structured_outputs`
-    (0.11+). Detect rather than assume, because guessing wrong means either a
-    TypeError at request build time or -- worse -- a silently unconstrained run
-    that looks fine until the parse rate comes back at 70%.
+    `guided_decoding` in older versions, `structured_outputs` from 0.11.
     """
     try:
         from vllm import SamplingParams
@@ -389,14 +297,10 @@ def _structured_kwargs(kind: str, schema: dict) -> dict:
 
 
 def sampling_base(n_samples: int, temperature: float) -> dict:
-    """The sampling params, in ONE place.
+    """Sampling parameters, shared by run() and dry_run().
 
-    dry_run used to restate these as a print-format string, so every change
-    here needed a second edit there and never got one: max_tokens went
-    32 -> 1024 -> 1536 while the dry run went on explaining a 1024 cap, and
-    repetition_penalty went 1.05 -> 1.1 while both the dry run and the comment
-    below still named 1.05. Returning a dict that both callers read makes that
-    function's "mirrors run() rather than restating it" claim true.
+    max_tokens leaves room for the per-region reasoning text the prompt asks
+    for; repetition_penalty stops that text from looping until truncation.
     """
     return dict(n=n_samples, temperature=temperature, top_p=0.95,
                 max_tokens=1536, repetition_penalty=1.1, seed=1234)
@@ -406,27 +310,6 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
         structured: bool = True, reasoning: str = "free") -> pd.DataFrame:
     from vllm import SamplingParams
 
-    # n=n_samples shares the prefill across all samples. With images, prefill
-    # dominates, so this is close to a free 4-5x versus n separate requests.
-    #
-    # max_tokens is large, not 32: A.4.3 asks for per-region `reasoning`
-    # strings before the scores, so a multi-region response is hundreds of
-    # tokens. At 32 every response truncates mid-reasoning and parses as
-    # nothing.
-    # repetition_penalty is load-bearing, not tuning. On the first real run
-    # (2026-08-26) 3 of 10 responses collapsed into a loop -- one repeated
-    # "The motorcycle is now more visible, and it appears to be a dark color..."
-    # about twenty times verbatim until it hit max_tokens mid-JSON and parsed
-    # as nothing. That was the ENTIRE 30% parse failure. Free-running reasoning
-    # inside a JSON field at temperature 0.7 is exactly the setup that invites
-    # it: nothing in the grammar pushes toward closing the string.
-    # 1.1, raised from 1.05 when 1.05 did not hold the loop. Still mild enough
-    # not to distort the score tokens, which are what we actually measure.
-    #
-    # max_tokens 1024 -> 1536: a 5-region response with per-region reasoning
-    # legitimately runs long, and truncation costs the whole response. The
-    # ceiling is max_model_len 4096 minus a ~1,750-token prompt, so 1536 still
-    # leaves headroom.
     base = sampling_base(n_samples, temperature)
 
     kind = structured_kind() if structured else None
@@ -434,9 +317,6 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
         print(f"structured output: {kind} (JSON schema per request, "
               f"reasoning={reasoning})")
     elif not structured:
-        # Distinct from "unavailable": this is the operator's choice. The old
-        # message claimed the API was missing either way, which is a lie when
-        # --no-structured was passed and sent you looking for the wrong bug.
         print("structured output: DISABLED by --no-structured. Expect dropped "
               "regions and missing\n"
               "         background/overall_score; check coverage with "
@@ -450,8 +330,8 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
               "parse rate and run\n"
               "         scripts/diagnose_parse.py before trusting anything.")
 
-    # One SamplingParams per request: the SC schema pins the exact region ids
-    # for that variant, and PQ has a different shape entirely.
+    # One SamplingParams per request: each SC schema names that variant's
+    # region ids, and PQ has a different shape.
     sps = []
     for m in meta:
         kw = dict(base)
@@ -463,8 +343,8 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
 
     outs = llm.chat(msgs, sps)
 
-    # SC first: one row per (variant, sample, region), plus a background row.
-    # PQ is image-level and merged on afterwards.
+    # One row per (variant, sample, region) plus a background row; the
+    # image-level PQ scores are merged onto every row of their variant.
     recs, pq_by_key = [], {}
     for m, o in zip(meta, outs):
         if m["kind"] != "pq":
@@ -479,20 +359,12 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
         for i, cand in enumerate(o.outputs):
             sc = parse_sc(cand.text)
             pq = pq_by_key.get((m["variant_id"], i))
-            # slot_idx is the region's POSITION in the list the judge was
-            # shown, which is what the `shuffle` axis varies. "the score tracks
-            # list position rather than region content" is a far stronger
-            # statement than "the score moved", and it costs one integer.
+            # slot_idx: the region's position in the list shown to the judge.
             for slot, rid in enumerate(list(m["region_ids"]) + ["bg"]):
                 pair = None if rid == "bg" else sc.get("regions", {}).get(rid)
                 recs.append({
-                    # str(rid), NOT rid. The column carries region ints and the
-                    # literal "bg", and pyarrow infers int64 from the ints then
-                    # dies on the first "bg" -- which would surface as an
-                    # ArrowInvalid in res.to_parquet() AFTER a full shard had
-                    # been judged. Stringify here so the parquet write cannot
-                    # throw away an hour of A10 time. target_region_id is
-                    # stringified alongside it so the two stay comparable.
+                    # Region ids are stored as strings so the column can also
+                    # hold "bg" when written to parquet.
                     **base, "sample_idx": i, "scored_region_id": str(rid),
                     "slot_idx": -1 if rid == "bg" else slot,
                     "sc_success": pair[0] if pair else None,
@@ -504,11 +376,7 @@ def run(llm, msgs, meta, n_samples: int, temperature: float,
                     "pq_artifacts": pq[1] if pq else None,
                     "reward": region_reward(sc, rid, pq),
                     "parsed": bool(sc),
-                    # finish_reason and n_tokens distinguish the two ways a
-                    # response fails to parse: truncated at max_tokens (fix by
-                    # raising the cap or shortening the reasoning) versus
-                    # well-terminated but malformed (fix the prompt). Without
-                    # them a low parse rate is just a number you cannot act on.
+                    # Distinguish truncated responses from malformed ones.
                     "finish_reason": getattr(cand, "finish_reason", None),
                     "n_tokens": len(getattr(cand, "token_ids", ()) or ()),
                     "raw": cand.text,
@@ -525,12 +393,7 @@ def _gpu_name() -> str | None:
 
 
 def preflight(rows: pd.DataFrame, bases: Path, variants: Path) -> dict:
-    """Stat every file build_requests will open, without decoding any of them.
-
-    Cheap enough to run over a whole shard, and it turns the usual
-    "FileNotFoundError on request 4,812, twenty minutes in" into an inventory
-    you can read before anything loads.
-    """
+    """List every input file build_requests would open that does not exist."""
     missing: dict[str, list[str]] = {"regions.json": [], "source.png": [], "variant": []}
     seen: set[str] = set()
     for row in rows.itertuples():
@@ -547,8 +410,7 @@ def preflight(rows: pd.DataFrame, bases: Path, variants: Path) -> dict:
 
 
 def describe_message(msg: list) -> str:
-    """Render one chat message for reading: images summarised to mode/size,
-    prompt text shown in full — the prompt is the thing worth eyeballing."""
+    """One chat message as text: images summarised, prompt shown in full."""
     lines = []
     for c in msg[0]["content"]:
         if c["type"] == "image_pil":
@@ -563,11 +425,9 @@ def describe_message(msg: list) -> str:
 
 
 def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
-    """Build the requests and print the first one. Never imports vLLM.
+    """Build the requests and print the first one, without importing vLLM.
 
-    This exists so message construction and manifest plumbing can be checked on
-    a machine with no GPU, leaving only the vLLM API surface itself to be
-    debugged on a judge VM.
+    Lets request construction be checked on a machine with no GPU.
     """
     print("=== DRY RUN: building requests only, vLLM is never imported ===")
 
@@ -589,9 +449,7 @@ def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
     print(f"{len(msgs)} requests ({per_variant:.2f} per variant: 1 SC + 1 PQ) "
           f"x n={a.n_samples} = {len(msgs) * a.n_samples} generations")
 
-    # A presentation axis is easy to get silently wrong -- a permutation that
-    # never permutes, a subset that drops the target -- and nothing in the
-    # score column afterwards would reveal it. Show what actually changed.
+    # Show what the presentation actually changed.
     if a.presentation != "baseline":
         canon = [r["region_id"] for r in
                  json.loads((bases / rows.iloc[0].base_id / "regions.json").read_text())]
@@ -621,9 +479,6 @@ def dry_run(rows: pd.DataFrame, bases: Path, variants: Path, a) -> int:
     print(describe_message(msgs[0]))
     print("]}]")
 
-    # These mirror run() and load_engine() rather than restating them from
-    # memory. The point of a dry run is to show what WOULD happen, so a stale
-    # number here is worse than no number at all.
     print("\n--- sampling params that would be used (not constructed) ---")
     sp = sampling_base(a.n_samples, a.temperature)
     print("  " + " ".join(f"{k}={v}" for k, v in sp.items()))
@@ -655,62 +510,36 @@ def main():
     ap.add_argument("--out", help="output parquet; required unless --dry-run")
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--of", type=int, default=1)
-    # Greedy, decided 2026-09-04. These were n=5 @ T=0.7, and that was not an
-    # arbitrary choice -- it bought two things. (1) The noise floor:
-    # stage4.noise_floor is the SD across repeated samples of one input, and
-    # there is no other way to get it. (2) The expected-score readout, which
-    # needed logprobs over several samples. Reason (2) is dead: logprobs are
-    # gone and expected_score_from_logprobs raises. Reason (1) is still real,
-    # but it makes n=5 a MEASURING INSTRUMENT, not a production setting -- and
-    # it had been left switched on for the main run, where it produced a pilot
-    # nobody could read (the judge disagreed with itself by 38% of the scale on
-    # byte-identical input) at 2.8x the cost.
-    #
-    # So: greedy here, and the floor comes from one small deliberate run:
-    #   --temperature 0.7 --n-samples 5   over the same variants, own --out.
-    # Like --gpu-util, this must match across all five VMs.
+    # Greedy by default. Must match across shards, like --gpu-util.
     ap.add_argument("--n-samples", type=int, default=1)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--limit", type=int, default=None, help="pilot mode: cap variants")
-    # max_model_len is the concurrency divisor: vLLM's max concurrency is
-    # KV-cache-tokens / max_model_len. Our prompts are ~950 tokens and outputs
-    # ~300, so 4096 reserves more than double what a request can use and halves
-    # how many fit at once. Exposed so it can be measured rather than argued
-    # about; it must match across VMs like --gpu-util does.
     ap.add_argument("--max-model-len", type=int, default=4096,
                     help="context reserved per request (default 4096). Lower "
                          "raises max concurrency proportionally; must be the "
                          "same on every VM.")
     ap.add_argument("--gpu-util", type=float, default=DEFAULT_GPU_UTIL,
                     help=f"gpu_memory_utilization (default {DEFAULT_GPU_UTIL}); "
-                         "all five VMs must pass the same value")
+                         "all VMs must pass the same value")
     ap.add_argument("--reasoning", default="free", choices=REASONING_MODES,
                     help="how the schema expresses the reasoning field. "
-                         "free (default) is 7.5x faster than bounded at "
-                         "identical parse and coverage; bounded's maxLength "
-                         "makes xgrammar count characters and costs 58.9s per "
-                         "request against 7.9s. none drops the field, which "
-                         "A.4.3 asks for -- state it in the report if used.")
+                         "free (default) is 7.5x faster than bounded at the "
+                         "same parse rate; none drops the field, which the "
+                         "protocol asks for.")
     ap.add_argument("--presentation", default="baseline", choices=PRESENTATIONS,
-                    help="how the judge is TOLD about the regions, for the "
-                         "nuisance and exploitability analyses. baseline is "
-                         "the identity and is what every other run uses. The "
-                         "images on disk are never modified -- see "
-                         "src/presentation.py. Write each condition to its own "
-                         "parquet under out/nuisance/, NOT alongside "
+                    help="re-package the requests for the nuisance and "
+                         "exploitability analyses (src/presentation.py). Write "
+                         "each condition to its own parquet, not alongside "
                          "out/scores_shard*.parquet: stage 4 does not group by "
-                         "presentation and would pool the conditions together "
-                         "silently.")
+                         "presentation.")
     ap.add_argument("--bbox-frame", default="pixel", choices=BBOX_FRAMES,
                     help="coordinate frame of the region boxes in the SC "
-                         "prompt. pixel (default) is what every run before "
-                         "2026-10-22 sent; norm1000 is the 0-1000 relative "
-                         "frame Qwen3-VL and InternVL3 ground in. A stage-3 "
-                         "flag, never a manifest column (invariant 7).")
+                         "prompt: pixel (default), or norm1000, the 0-1000 "
+                         "relative frame Qwen3-VL and InternVL3 use.")
     ap.add_argument("--max-dynamic-patch", type=int,
                     default=DEFAULT_MAX_DYNAMIC_PATCH,
                     help="InternVL only: max 448px tiles per image (default "
-                         f"{DEFAULT_MAX_DYNAMIC_PATCH}, what the A10 runs used). "
+                         f"{DEFAULT_MAX_DYNAMIC_PATCH}). "
                          "6 needs --max-model-len 8192. Ignored for Qwen.")
     ap.add_argument("--no-structured", action="store_true",
                     help="disable JSON-schema-constrained decoding. Only for "
@@ -721,12 +550,6 @@ def main():
                          "importing vLLM — runs on a machine with no GPU")
     a = ap.parse_args()
 
-    # A footgun the greedy default creates: asking for repeated samples without
-    # also raising the temperature. Decoding is deterministic at T=0 with a
-    # fixed seed, so all n come back identical, the within-variant SD is 0, and
-    # the noise floor -- the only reason to pay for n>1 -- is not measured.
-    # Stage 4 does report a zero floor honestly, but by then the GPU time is
-    # spent, so say it before the engine loads rather than after.
     if a.n_samples > 1 and a.temperature == 0:
         print(f"WARNING: --n-samples {a.n_samples} at --temperature 0 gives "
               f"{a.n_samples} IDENTICAL samples.\n"
@@ -745,10 +568,6 @@ def main():
     if not a.out:
         ap.error("--out is required unless --dry-run is given")
 
-    # Check the inputs exist BEFORE decoding any of them. build_requests used to
-    # raise a bare PIL FileNotFoundError on the first missing variant, which
-    # names a hash nobody recognises and never mentions stage 2 -- the usual
-    # cause is run_shard.sh having cleaned /dev/shm at the end of a previous run.
     pf = preflight(df, Path(a.bases), Path(a.variants))
     n_missing = sum(len(v) for v in pf["missing"].values())
     if n_missing:
@@ -776,15 +595,10 @@ def main():
                       tiles=a.max_dynamic_patch)
     res = run(llm, msgs, meta, a.n_samples, a.temperature,
               structured=not a.no_structured, reasoning=a.reasoning)
+    # Provenance: how this parquet was produced.
     res["judge"] = a.model
-    # Provenance, alongside the model. Sampling moves the numbers further than
-    # the choice between two Qwen sizes does, and a merged set of five shards
-    # otherwise cannot say how any of them was decoded -- which is exactly the
-    # ambiguity scripts/nuisance_report.py has to work around by filename.
     res["n_samples"] = a.n_samples
     res["temperature"] = a.temperature
-    # Engine provenance. Runs on different hardware or box frames are kept in
-    # separate directories, but a parquet must still say how it was made.
     res["bbox_frame"] = a.bbox_frame
     res["max_model_len"] = a.max_model_len
     res["gpu_util"] = a.gpu_util
@@ -795,7 +609,6 @@ def main():
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     res.to_parquet(a.out)
 
-    # Fail loudly on a degenerate judge rather than discovering it in analysis.
     ok = res.parsed.mean() if len(res) else 0.0
     print(f"parse rate: {ok:.1%}")
     if ok < 0.95:

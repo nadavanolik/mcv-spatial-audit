@@ -1,18 +1,11 @@
 """
-Stage 4 against synthetic scores in stage 3's exact output schema.
+Stage 4 on synthetic scores in stage 3's output schema.
 
-Stage 4 has never seen real data and cannot until stages 0/1 run on the editor
-VM. What CAN be checked on the laptop is that the analysis says the right thing
-about data whose answer we already know - so this fabricates three judges with
-three known behaviours and asserts the tables recover them:
+Three synthetic judges with known behaviour, and the tables must recover them:
 
   perfect      only the corrupted region drops           -> AUROC 1.0
   blind        every score is the same constant          -> degenerate, no crash
-  global       damage moves EVERY region equally         -> AUROC 0.5, R^2 ~ 1
-
-`global` is the important one. It is exactly the failure mode the audit exists
-to detect - a per-region number that is really one image-level impression - and
-a stage 4 that reported a healthy AUROC for it would be worse than useless.
+  global       damage moves every region equally         -> AUROC 0.5, R^2 ~ 1
 
 Run:  ./.venv/Scripts/python.exe tests/test_stage4.py
 """

@@ -1,49 +1,23 @@
 """
-Judge prompting and score extraction — SpatialFlow-GRPO's published protocol.
+Judge prompts, JSON schemas, response parsing and the region reward.
 
-SOURCE: arXiv:2606.26872, Appendix A.4.3, "Scoring prompt for the region-aware
-reward model". SFREWARD_SC_VERBATIM below is copied from the paper. Do not
-reword it. The audit's whole claim is that it evaluates *the published
-protocol*, so paraphrase would quietly invalidate the comparison.
-
-PROVENANCE — read before trusting any of this:
-
-  VERBATIM from A.4.3:  SFREWARD_SC_VERBATIM, in full.
-  OURS, necessarily:    how the instruction and the region list are appended.
-                        A.4.3 says only "You will be provided with
-                        pre-identified editing regions (bounding boxes with
-                        labels)" and never shows the injection format. We follow
-                        A.5.2's convention ("Editing instruction: {instruction}")
-                        and pass regions as the JSON the model must echo back.
-  RECONSTRUCTED:        SFREWARD_PQ_RECONSTRUCTED. The paper gives SFReward's PQ
-                        *output* (A.4.4) but never its PQ *prompt*. A.5.2's PQ
-                        prompt is the MultiEditBench/VIEScore one on a 0-10
-                        scale for GPT-4.1 — a different purpose. Ours matches
-                        A.4.4's output shape. FLAG THIS IN THE REPORT.
-
-Two further gaps worth stating in the write-up rather than papering over:
-
-  1. SFReward is a *fine-tuned* model (Qwen3-VL-8B-Instruct + SFReward-14K).
-     A.4.3's prompt is what labelled that data with a Gemini-3-Pro teacher. We
-     apply it to base Qwen3-VL-8B, so we audit the prompt-based protocol, not
-     the released reward model.
-  2. Equation (3) multiplies every region reward by AES_i = min(PQ), a single
-     image-level factor shared across all regions of an image. Part of each
-     "region score" is therefore global by construction. Within one image it
-     cancels out of region-to-region comparisons; across variants it does not.
+The region-scoring (SC) prompt is SpatialFlow-GRPO's Appendix A.4.3
+(arXiv:2606.26872), copied verbatim. Two parts are ours because the paper does
+not print them: how the instruction and region list are appended to that
+prompt, and the image-quality (PQ) prompt, written to produce the output shape
+of its Appendix A.4.4.
 """
 from __future__ import annotations
 
 import json
 import math
-import re
 from functools import lru_cache
 from typing import Optional
 
 # A.4.3 scores every region on 0-25, not 1-5.
 SCORE_MIN, SCORE_MAX = 0, 25
 
-# --- verbatim, arXiv:2606.26872 Appendix A.4.3 -------------------------------
+# Verbatim, arXiv:2606.26872 Appendix A.4.3.
 SFREWARD_SC_VERBATIM = """You are a professional digital artist. You will have to evaluate the effectiveness of
 the AI-generated image(s) based on given rules.
 All the input images are AI-generated.
@@ -74,7 +48,7 @@ artifacts outside editing regions.
 OVERALL (0-25):
 Overall success score and overall overediting score."""
 
-# --- ours: the paper never shows how these are appended ----------------------
+# Ours: the paper does not show how the instruction and regions are appended.
 _SC_SUFFIX = """
 
 Editing instruction: {instruction}
@@ -82,7 +56,7 @@ Editing instruction: {instruction}
 Editing regions:
 {regions_json}"""
 
-# --- reconstructed: A.4.4 shows the output, never the prompt -----------------
+# Ours: the paper shows the PQ output (A.4.4) but not its prompt.
 SFREWARD_PQ_RECONSTRUCTED = """The image is an AI-generated image. Evaluate the generation quality.
 SCORING (0-25):
 naturalness: 0 means the image does not look natural; 25 means it looks natural.
@@ -97,14 +71,10 @@ def xywh_to_xyxy(bbox) -> list:
     return [int(x), int(y), int(x + w), int(y + h)]
 
 
-# Which coordinate frame bbox_2d is written in. Stage-3 flag, never a manifest
-# column (invariant 7): it changes the prompt text, not the image bytes.
-#
-#   pixel     source-image pixels. What every run before 2026-10-22 sent.
-#   norm1000  relative, scaled to 0-1000 per axis. Qwen3-VL and InternVL3
-#             ground in this frame -- the echoed boxes on `main` come back in
-#             it (see bbox_2d below) -- so pixel boxes on a 640px-wide image
-#             are read as boxes shrunk toward the top-left corner.
+# Coordinate frame of bbox_2d in the prompt.
+#   pixel     source-image pixels.
+#   norm1000  relative, 0-1000 per axis: the frame Qwen3-VL and InternVL3
+#             ground in (the boxes they echo back are in it).
 BBOX_FRAMES = ("pixel", "norm1000")
 
 
@@ -128,15 +98,10 @@ def bbox_in_frame(bbox, frame: str = "pixel", size=None) -> list:
 
 def build_sc_prompt(instruction: str, regions: list, frame: str = "pixel",
                     size=None) -> str:
-    """One prompt scoring EVERY region of one image, per A.4.3.
+    """The SC prompt for one image, listing every region to be scored.
 
-    Note this is one request per *variant*, not per region — the protocol hands
-    the judge all regions at once and asks it to score them separately. Which
-    means cross-region leakage is measurable exactly as the paper's judge would
-    exhibit it, rather than as an artefact of how we chose to slice requests.
-
-    `frame`/`size`: see BBOX_FRAMES. The default reproduces the committed runs
-    byte for byte.
+    As in A.4.3, all regions are scored in one request. `frame`/`size`: see
+    BBOX_FRAMES.
     """
     listed = [{"id": r["region_id"], "label": r["label"],
                "bbox_2d": bbox_in_frame(r["bbox"], frame, size)} for r in regions]
@@ -150,22 +115,9 @@ def build_pq_prompt() -> str:
     return SFREWARD_PQ_RECONSTRUCTED
 
 
-# Grammar-constrained decoding. Free-running `reasoning` text is what breaks
-# this protocol in practice: on real COCO edits the judge fell into verbatim
-# loops ("a black and white motorcycle with a rider wearing a helmet, " x110)
-# that ran to max_tokens mid-JSON, and separately dropped regions and omitted
-# background/overall_score. 30% of responses parsed as nothing and coverage of
-# the rest was 60%.
-#
-# A schema fixes all three at once: maxLength bounds the loop, minItems/maxItems
-# force every requested region, and `required` forces the two top-level keys.
-#
-# NOTE FOR THE REPORT: this constrains the FORMAT, never the VALUES. Any score
-# in 0-25 remains reachable, so what the judge thinks is unaffected -- only its
-# ability to wander off mid-sentence. A.4.3 asks for a "brief reason" already;
-# this enforces what the prompt requests rather than adding a new demand.
-# 120, not 200. Under a grammar the model spends its budget differently, and
-# reasoning is the one field we never read -- only `score` matters.
+# JSON schemas for constrained decoding. They fix the format only: every
+# requested region must be scored and every score in 0-25 stays reachable.
+# Without them the judge drops regions and loops inside `reasoning`.
 REASONING_MAXLEN = 120
 
 _SCORE_PAIR = {
@@ -175,26 +127,12 @@ _SCORE_PAIR = {
 }
 
 
-# How the free-text `reasoning` field is expressed in the schema. It is the
-# only unbounded thing in the grammar, and grammar cost dominates the run:
-# constrained decoding measured 21x slower than unconstrained (13.5 vs 265.9
-# output tok/s), while a 4B model with 26x the concurrency was 2% faster --
-# so the mask computation, not batching, is the whole bottleneck.
-#
-#   bounded  maxLength on the string. CONFIRMED as the slowdown: measured
-#            58.9s/request against 7.9s for the identical schema with the bound
-#            removed. A length bound makes xgrammar track a character counter,
-#            which multiplies FSM states. Do not use it.
-#   free     a plain string. THE DEFAULT. 7.5x faster than bounded at
-#            identical quality -- 100% parse and 100% region coverage over 50
-#            responses, mean 333 tokens against a 1536 cap. Loops are held off
-#            by repetition_penalty and disable_any_whitespace rather than by
-#            the grammar, and a loop that slips through simply truncates one
-#            response, which diagnose_parse reports.
-#   none     no reasoning field at all. 11.4x, only 1.5x better than `free` --
-#            but A.4.3 asks for reasoning BEFORE the scores, and reasoning
-#            first plausibly changes the score, so dropping it audits a
-#            modified protocol. State it in the report if used.
+# How the `reasoning` field appears in the schema (grammar cost dominates
+# judging time).
+#   bounded  string with maxLength. 7.5x slower than `free` (xgrammar tracks a
+#            character counter); do not use.
+#   free     plain string (default).
+#   none     no reasoning field; the protocol asks for one, so this changes it.
 REASONING_MODES = ("bounded", "free", "none")
 
 
@@ -229,16 +167,8 @@ def _region_item(region_id: int, mode: str = "free") -> dict:
 
 @lru_cache(maxsize=64)
 def _sc_schema_cached(ids: tuple, mode: str) -> dict:
-    """Cached by region-id tuple.
-
-    Nearly every base has the same shape -- ids (0,1,2) -- so the whole run
-    uses a handful of distinct schemas. xgrammar compiles a grammar per
-    distinct schema and that compilation is not cheap; handing back the SAME
-    object for the same ids gives its cache every chance to hit instead of
-    recompiling an identical grammar thousands of times.
-
-    Returned dicts must therefore be treated as immutable by callers.
-    """
+    """Cached so identical region lists reuse one schema object (and xgrammar
+    its compiled grammar). Callers must not modify the returned dict."""
     return _build_sc_schema(list(ids), mode)
 
 
@@ -253,13 +183,8 @@ def _build_sc_schema(ids: list, mode: str) -> dict:
     return {
         "type": "object",
         "properties": {
-            # prefixItems pins slot k to region ids[k], rather than letting
-            # any slot hold any id. With a bare enum + minItems the model
-            # scored region 0, was then forced to open a second object with
-            # nothing telling it which region that was, and produced filler
-            # ("label": "AI generated"). Forcing a count without forcing an
-            # identity asks the model to invent regions; pinning the identity
-            # turns each slot into a well-posed question.
+            # prefixItems pins slot k to region ids[k], so each answer slot
+            # belongs to a known region.
             "edit_region": {
                 "type": "array",
                 "minItems": len(ids), "maxItems": len(ids),
@@ -269,10 +194,7 @@ def _build_sc_schema(ids: list, mode: str) -> dict:
                     "properties": {
                         "id": {"type": "integer", "enum": ids},
                         "label": {"type": "string", "maxLength": 60},
-                        # Kept optional and unread: A.4.3's output format asks
-                        # for it, but the model answers in its own normalised
-                        # 0-1000 space rather than our pixels, so it is not a
-                        # usable echo of the region we specified.
+                        # Requested by A.4.3's format; optional and not read.
                         "bbox_2d": {
                             "type": "array",
                             "items": {"type": "integer"},
@@ -339,9 +261,9 @@ def _valid(v) -> bool:
 
 
 def parse_sc(text: str) -> dict:
-    """A.4.3's structured SC output -> {regions: {id: [succ, pres]},
-    background: float, overall: [succ, pres]}. Missing pieces are omitted
-    rather than defaulted, so a malformed response is visible as a gap."""
+    """SC response -> {regions: {id: [succ, pres]}, background, overall}.
+
+    Missing or invalid pieces are omitted, not defaulted."""
     d = _extract_json(text)
     if not isinstance(d, dict):
         return {}
@@ -382,13 +304,8 @@ def parse_pq(text: str) -> Optional[list]:
 def region_reward(sc: dict, region_id, pq: Optional[list], C: float = 25.0) -> Optional[float]:
     """Equation (3): R_{i,r} = sqrt( phi(IF_{i,r}) * AES_i ) / C.
 
-    phi = min(score_success, score_preserve) for a foreground region, or the
-    background score for r == "bg". AES_i = min(PQ), an image-level term shared
-    by every region of the image — so it cannot contribute anything spatially
-    resolved, and within a single image it cancels out of any region-to-region
-    comparison. That is worth saying out loud in the report: part of the
-    "region" reward is global by construction, before any judge behaviour is
-    measured.
+    phi = min(score_success, score_preserve) for a region, or the background
+    score for r == "bg". AES_i = min(PQ) is image-level, shared by every region.
     """
     if region_id == "bg":
         phi = sc.get("background")
@@ -400,34 +317,11 @@ def region_reward(sc: dict, region_id, pq: Optional[list], C: float = 25.0) -> O
     return math.sqrt(phi * min(pq)) / C
 
 
-# --- legacy 1-5 helpers, kept only until stage3/stage4 are migrated ----------
-
-def parse_scores(text: str) -> dict:
-    """DEPRECATED. Reads the old flat {"SC": n, "PQ": n} placeholder format,
-    which the real protocol does not produce. Use parse_sc / parse_pq."""
-    out = {}
-    for key in ("SC", "PQ"):
-        m = re.search(rf'"{key}"\s*:\s*(\d+)', text)
-        if m:
-            out[key] = int(m.group(1))
-    return out
-
-
 def expected_score_from_logprobs(output) -> dict:
-    """DEPRECATED for the real protocol, and not a trivial port.
+    """Not implemented, deliberately.
 
-    The old readout worked because a score was a single digit token immediately
-    after `"SC":`. Under A.4.3 a score is a two-digit number on 0-25, nested in
-    a list, inside a per-region object, after a free-text `reasoning` field
-    whose length is not fixed. Summing p(k)*k over digit tokens is no longer
-    well defined: the tens and units digits are separate tokens, and the
-    position of the score varies with how long the model's reasoning ran.
-
-    That matters because architectural decision 6 (two readouts, sampled and
-    expected) rests on this. The continuous readout is what keeps AUROC off a
-    pile of ties. Porting it needs a deliberate design pass — locate the score
-    tokens structurally rather than by regex on a running prefix — so it is
-    left failing loudly rather than silently returning wrong numbers.
+    A continuous readout would turn "the score did not move" into a small
+    non-zero change, hiding the ties the analysis reports. Must keep raising.
     """
     raise NotImplementedError(
         "expected_score_from_logprobs has not been ported to the A.4.3 output "

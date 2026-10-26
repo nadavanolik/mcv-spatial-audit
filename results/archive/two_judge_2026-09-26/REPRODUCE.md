@@ -14,7 +14,7 @@ judge, so one glob loads both judges.
 ```bash
 python -m src.stage4_analyze \
     --scores 'results/*/scores_shard*.parquet' \
-    --out results/two_judge_2026-09-26 \
+    --out results/archive/two_judge_2026-09-26 \
     --all-readouts --min-control 0
 ```
 
@@ -28,7 +28,7 @@ needs `--drift-csv data/bases/edit_drift.csv`, which ships in `bases.tar.gz`
 ```bash
 python -m src.stage4_analyze \
     --scores 'results/*/scores_shard*.parquet' \
-    --out results/two_judge_2026-09-26/phi \
+    --out results/archive/two_judge_2026-09-26/phi \
     --col phi --all-readouts --min-control 0
 ```
 
@@ -39,8 +39,8 @@ Coherence is read here, on `phi`, for the reason given in
 
 ```bash
 python -m scripts.pq_response \
-    --scores 'results/internvl3_2b_2026-09-26/scores_shard*.parquet' \
-    --out results/two_judge_2026-09-26/pq_response_internvl.csv
+    --scores 'results/archive/internvl3_2b_2026-09-26/scores_shard*.parquet' \
+    --out results/archive/two_judge_2026-09-26/pq_response_internvl.csv
 ```
 
 The Qwen equivalent is `../main_2026-09-18/pq_response.csv`.

@@ -1,30 +1,22 @@
 """
-Does damage to one region land inside ANOTHER region's box?  [CPU]
+How much of each other region's box did a corruption reach? [CPU]
 
-The judge is told about regions as boxes (bbox_2d), and stage 0 never checked
-that boxes do not overlap (its docstring promised "low mask overlap"; no code
-enforced it). On `main` a person sits on a motorcycle, a cup on a table. When
-we damage region A and region B's box covers part of A, B's score moving is not
-clearly a leak: some of what the judge was told is region B really changed.
-Such pairs are contaminated negatives, and they pull AUROC toward 0.5 and
-inflate coupling for a reason that has nothing to do with the judge.
-
-This measures it on the RENDERED bytes, not from the masks: a pixel counts as
-damaged when the variant differs from the clean edit by more than 5 levels
-(scripts/verify_corruption.py's visibility threshold), which includes the
-feather band around the mask.
+The judge sees regions as boxes, and boxes can overlap (a person on a
+motorcycle). If damage to region A reaches region B's box, B's score moving is
+not clearly a leak. Measured on the rendered images: a pixel counts as damaged
+when it differs from the clean edit by more than 5 levels.
 
 One row per (corrupted variant, non-target region):
 
-  other_box_damaged    share of the other region's box that is visibly damaged.
-                       The contamination measure stage 4's --overlap-csv uses.
+  other_box_damaged    share of the other region's box that is visibly damaged
+                       (used by stage 4's --overlap-csv)
   damage_share_in_box  share of all visible damage that falls in that box
-  damage_px            visible damaged pixels in the whole variant
-  box_iou, box_contain IoU of the target and other boxes, and intersection over
-                       the SMALLER box -- the geometry alone, render-independent
+  damage_px            visibly damaged pixels in the whole variant
+  box_iou, box_contain IoU of the two boxes, and intersection over the
+                       smaller box
 
 Usage:
-    python -m scripts.region_overlap --manifest out/manifest_main.parquet \\
+    python -m scripts.region_overlap --manifest out/manifest_main.parquet \
         --bases data/bases --variants /dev/shm/mcv/variants --out out/overlap.csv
 """
 from __future__ import annotations

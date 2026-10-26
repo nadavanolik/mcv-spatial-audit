@@ -2,12 +2,8 @@
 # Build data/bases from COCO, from nothing, on a machine that has neither the
 # annotations nor the images.
 #
-# This exists so base specs never have to be TRANSFERRED. Stage 0 is a pure
-# function of (annotations file, config.yaml, --seed): same inputs, same 150
-# photographs, same regions, same instructions, byte-identical under the pinned
-# numpy / opencv / Pillow. Regenerating is ~30MB of download and a few minutes,
-# against ~120MB of images in git history forever -- and it exercises the
-# reproducibility claim instead of asserting it.
+# Stage 0 is deterministic given the annotations, config.yaml and --seed, so
+# every machine that runs this gets the same photographs and instructions.
 #
 # Usage:
 #     bash scripts/stage0.sh              # 150 bases from train2017
@@ -31,19 +27,14 @@ echo "=== stage 0: $N bases from $SPLIT on $(hostname) ==="
 
 # --- guards, all of them before any download ------------------------------
 
-# pycocotools is the one dependency stage 0 has that no other stage needs, and
-# it is deliberately NOT in requirements.txt. Fail here rather than after
-# fetching 700MB of annotations.
+# pycocotools is needed only here and is not in requirements.txt.
 python -c "import pycocotools" 2>/dev/null || {
   echo "ERROR: pycocotools is missing." >&2
   echo "  bash scripts/setup.sh coco     # or: pip install -r requirements-coco.txt" >&2
   exit 1
 }
 
-# Re-running on top of an existing data/bases is how you end up editing one set
-# of instructions and judging another. Any change to the selection filter or
-# the instruction templates restales every base, so the safe move is always to
-# delete and regenerate, never to overwrite in place.
+# Never overwrite an existing data/bases in place: regenerate it.
 if [[ -d "$OUT" ]] && [[ -n "$(ls -A "$OUT" 2>/dev/null)" ]]; then
   if [[ -z "${FORCE:-}" ]]; then
     echo "ERROR: $OUT already exists and is not empty." >&2
@@ -68,10 +59,7 @@ fi
 
 # --- 1. annotations (NOT the image split) ---------------------------------
 
-# 241MB, and it carries train2017 and val2017 both. The 18GB image split is
-# never downloaded: this filter keeps about 1 image in 100, so fetching the
-# split would be 700x more download than the job needs and would not fit next
-# to FLUX on a 90G root.
+# 241MB, both splits. The image split itself is never downloaded.
 mkdir -p "$ANN_DIR"
 if [[ -f "$ANN" ]]; then
   echo "[1/3] $ANN already present"
@@ -92,9 +80,7 @@ fi
 
 # --- 2. only the images that actually qualify -----------------------------
 
-# --list-urls prints one URL per line on stdout and every other word on stderr,
-# so this pipes straight into wget. It re-runs the same selection the real run
-# will do, with the same seed, so the two agree on which images are needed.
+# --list-urls runs the same selection and prints only URLs on stdout.
 echo "[2/3] resolving which images qualify"
 mkdir -p "$IMG_DIR"
 URLS=$(mktemp)

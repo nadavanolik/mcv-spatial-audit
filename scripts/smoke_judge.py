@@ -1,32 +1,16 @@
 """
-The whole audit in miniature, on synthetic images. Judge VM only.
+One real judge run on synthetic images. [GPU]
 
-Needs a loaded model but NO project data, so it runs before stage 1 exists.
-Uses the real A.4.3 prompt and the real corruption engine, so it exercises the
-actual pipeline rather than an approximation of it.
+Needs the model but no project data. Uses the real prompt and corruption code
+on a two-region synthetic image, with region 0 corrupted at each severity:
 
-Setup mirrors the experiment. Two regions, and — as stage0_coco.py really does
-— the instruction names BOTH, so both are legitimate `edit_region` entries:
+    region 0 should fall as severity rises
+    region 1 (untouched) should hold
+    the severity ladder should be graded, not all-or-nothing
 
-    instruction: "Change the blue square to red, and the green square to yellow."
-    edit:        both changes correctly applied          (the clean control)
-    variant_k:   that edit, with REGION 0 ONLY corrupted at severity k
+Also sends one request with no images.
 
-Then score every region of each variant and watch where the number moves.
-
-    region 0 should FALL as severity rises      -> the judge is spatially resolved
-    region 1 should HOLD (it is untouched)      -> movement here is leakage
-    the severity ladder should be MONOTONE      -> the score is graded, not binary
-
-That last one matters as much as the first. A judge that only ever emits 0 or
-25 makes delta-score all-or-nothing, the severity ladder carries no information,
-and AUROC collapses to a step function. Blatant synthetic inputs will saturate;
-what we need to see is whether anything in between exists.
-
-A text-only request is included as a nuisance probe: the judge will happily
-score an edit it was shown no images of, which is worth a line in the report.
-
-Usage (judge VM):
+Usage:
     python -m scripts.smoke_judge --gpu-util 0.89
     python -m scripts.smoke_judge --model Qwen/Qwen3-VL-4B-Instruct
 """

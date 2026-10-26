@@ -1,24 +1,15 @@
 """
-Did the corruption actually damage the image, and only inside the mask?
+Did the corruption damage the image, and only inside the mask? [CPU]
 
-CPU only, no GPU, no judge. Run this before concluding anything about judge
-sensitivity: "the judge did not react" is only a finding if there was something
-to react to. Nobody had checked, and a subtle corruption on a textured
-photograph would explain a flat result without implicating the judge at all.
-
-Reports, per corruption and severity:
+Per corruption and severity:
 
   inside      mean |pixel difference| within the target region's mask
-  outside     the same outside it -- MUST be ~0, or stage 2 is damaging pixels
-              it was never asked to touch and every leakage number is wrong
-  changed%    share of masked pixels moved by more than 5 intensity levels
-  contrast    inside / outside, i.e. how localised the damage is
-
-The `inside` column is also the number to quote in the report when stating how
-visible the stimulus was.
+  outside     the same outside it (should be ~0)
+  changed%    share of masked pixels changed by more than 5 levels
+  contrast    inside / outside
 
 Usage:
-    python -m scripts.verify_corruption --manifest out/manifest.parquet \\
+    python -m scripts.verify_corruption --manifest out/manifest.parquet \
         --bases data/bases --variants /dev/shm/mcv/variants
 """
 from __future__ import annotations

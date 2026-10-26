@@ -1,20 +1,9 @@
 """
-Do two judges agree about the same picture? [CPU]
+Do two judges agree about the same image? [CPU]
 
-The only analysis in this repo that deliberately spans judges.
-`nuisance_report.py` must be run once per judge -- its tables carry no judge
-column and would average two families into one meaningless row. This script
-exists because the opposite question is also worth asking: given the SAME image,
-the same regions and the same prompt, how much do two judges agree?
-
-That matters beyond curiosity. The four papers this audit examines train an
-editor against one judge's numbers. If two judges cannot agree which edits
-failed, then "the reward" is not a property of the edit at all, and a policy
-trained on one of them is fitting that judge rather than image quality.
-
-Pairing key is (variant_id, scored_region_id, presentation). Anything the two
-runs do not share is dropped, so an unparsed row on either side removes the
-pair rather than biasing one column.
+Pairs two judges' scores on the same (variant_id, scored_region_id,
+presentation); rows missing on either side are dropped. Reports agreement on
+the scores and on which edits each judge calls failed.
 
 Usage:
     python -m scripts.judge_agreement --scores 'out/nuisance/scores_*.parquet'

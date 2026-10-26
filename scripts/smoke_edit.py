@@ -1,27 +1,13 @@
 """
-One real FLUX Kontext edit on a synthetic image. Editor VM only.
+One real FLUX Kontext edit on a synthetic image. [GPU]
 
-The stage-1 counterpart to scripts/smoke_judge.py: needs a loaded model but NO
-project data, so it runs before stage 0 has produced anything. Run
-`python -m src.stage1_edit --preflight` first - that settles the API surface
-without downloading 34GB. This settles whether the thing actually generates.
+Needs the model but no project data. Run `python -m src.stage1_edit
+--preflight` first. Checks that the pipeline runs under sequential offload,
+that the edit comes back at the source resolution (the masks depend on it),
+that it changed the instructed region and not the other one, and reports
+seconds per image and peak memory.
 
-What it answers, in order of how expensive each is to learn late:
-
-  1. Does the pipeline load and RUN under sequential CPU offload on a 24GB
-     A10 at all? (Model-level offload provably cannot: the transformer is
-     23.8GB against ~21.37GiB free.)
-  2. Does the edit come back at the SOURCE resolution? Stage 0's masks are at
-     source resolution and stage 2 indexes them straight into edit.png, so a
-     size mismatch corrupts the wrong pixels and silently invalidates every
-     number downstream. This is the single most important check here.
-  3. Did it edit the region it was told to, and leave the other one alone?
-     Measured as a colour shift, not a judgement - the judge is a separate
-     stage with its own smoke test.
-  4. How many seconds per image, and how much VRAM? 200 bases have to fit in
-     an overnight run on one VM.
-
-Usage (editor VM):
+Usage:
     python -m scripts.smoke_edit
     python -m scripts.smoke_edit --steps 20 --out /dev/shm/smoke
 """

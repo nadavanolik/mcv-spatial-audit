@@ -1,17 +1,10 @@
 """
-Why did judge responses fail to parse? Reads a scores parquet. CPU only.
+Why did judge responses fail to parse? [CPU]
 
-stage3 stores the raw response text, so a low parse rate can be diagnosed
-without touching a GPU or re-running the judge. Run this before changing the
-prompt: the two failure modes have opposite fixes.
+Reads the raw responses stored in a scores parquet and separates:
 
-  TRUNCATED     the response hit max_tokens mid-JSON. A.4.3 demands per-region
-                `reasoning` before the scores, so a multi-region answer can be
-                hundreds of tokens and the cap is the binding constraint.
-                Fix: raise max_tokens, or ask for shorter reasoning.
-  MALFORMED     the response terminated on its own but is not the shape
-                parse_sc expects -- wrong keys, prose instead of JSON, scores
-                out of range. Fix: the prompt or the parser.
+  TRUNCATED   hit max_tokens mid-JSON (raise max_tokens or shorten reasoning)
+  MALFORMED   finished but not in the expected shape (fix the prompt or parser)
 
 Usage:
     python -m scripts.diagnose_parse --scores out/smoke_scores.parquet

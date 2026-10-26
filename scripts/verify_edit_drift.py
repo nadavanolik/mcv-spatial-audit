@@ -1,36 +1,20 @@
-"""Did the edit move the objects the masks describe?  [CPU]
+"""
+Did the edit move the objects the masks describe? [CPU]
 
-Stage 0 computes masks on `source.png`. Stage 2 applies them to `edit.png`, and
-stage 3 shows the judge bounding boxes in SOURCE coordinates. That chain assumes
-FLUX Kontext preserved the layout. It does not always: on some bases it re-poses
-people, re-frames the shot, or re-composes an interior entirely, and then the
-mask named "person" covers whatever moved into that spot.
+Masks are computed on the source photo and applied to the edit. Where the
+editor re-posed or re-framed the scene, a mask may no longer cover its object,
+which would look like a judge that cannot localise. Per base:
 
-The failure mode is dangerous because it is not neutral. A mask that no longer
-covers its object makes the judge look like it failed to localise -- which is
-the finding this project is testing. The confound MIMICS the result, so it has
-to be quantified rather than assumed away.
+  bg_absdiff   mean |source - edit| outside every mask.
+  edge_iou     IoU of dilated Canny edges, colour-invariant; 1.0 is an
+               identical layout. A low value means the layout cannot be
+               vouched for, not that it moved (a material change also changes
+               edges).
 
-Two numbers per base, and the difference between them matters:
-
-  bg_absdiff   mean |source - edit| OUTSIDE every mask. Mostly harmless: stage
-               2's baseline is edit.png, not source.png, so a global recolour
-               cancels out. Reported because it is what a reader expects to see
-               and because it explains the grayscale-source cases.
-
-  edge_iou     Canny edges, dilated, intersection-over-union. Colour-invariant,
-               so it isolates the part that does matter: whether structure
-               stayed put. 1.0 is an identical layout.
-
-`edge_iou` is an UPPER BOUND on displacement, not proof of it: "change the chair
-to glass" is supposed to destroy that object's edges. Treat a low score as
-"cannot vouch for this base", not as "this base moved".
-
-    python -m scripts.verify_edit_drift
     python -m scripts.verify_edit_drift --min-iou 0.4 --out out/edit_drift.csv
 
-Feed the csv to stage 4 to report every headline number on both the full set and
-the subset that keeps its geometry:
+Stage 4 then reports its headline numbers on all bases and on those above the
+threshold:
 
     python -m src.stage4_analyze --scores 'out/scores_shard*.parquet' \
         --drift-csv out/edit_drift.csv --min-edge-iou 0.4

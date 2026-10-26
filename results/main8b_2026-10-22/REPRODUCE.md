@@ -21,7 +21,8 @@ the test suites (`tests.txt`), the manifest hashes (`manifest_*.txt`: `main`
 ## Judging (GPU, for the record)
 
 One cell per (run, presentation, shard). Stage 2 renders the shard and stage 3
-judges it in the same session (see `.claude/CLAUDE.md` on `/dev/shm`).
+judges it in the same login session: `/dev/shm` is cleared when the
+user's last session ends (use `tmux`).
 
 | Folder | Model | `--bbox-frame` | Extra flags | Manifest | Presentations | Shards |
 |---|---|---|---|---|---|---|
@@ -58,7 +59,7 @@ python -m scripts.verify_corruption --manifest out/manifest_main.parquet \
 python -m scripts.region_overlap --manifest out/manifest_main.parquet \
     --bases data/bases --variants /dev/shm/mcv/variants \
     --out results/main8b_2026-10-22/checks/overlap.csv
-python -m scripts.bbox_frame_check --scores 'results/main_2026-09-18/scores_shard*.parquet' \
+python -m scripts.bbox_frame_check --scores 'results/archive/main_2026-09-18/scores_shard*.parquet' \
     --bases data/bases --out results/main8b_2026-10-22/checks/bbox_frame_committed.csv
 ```
 
@@ -83,7 +84,7 @@ Run against run:
 
 ```bash
 python -m scripts.compare_runs \
-    --a 'results/main_2026-09-18/scores_shard*.parquet' --a-name committed \
+    --a 'results/archive/main_2026-09-18/scores_shard*.parquet' --a-name committed \
     --b "$R/main_qwen_pixel/scores_shard*.parquet" --b-name rerun \
     --min-control 0 --out $R/compare/rerun
 python -m scripts.compare_runs \

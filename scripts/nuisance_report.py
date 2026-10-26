@@ -1,22 +1,11 @@
 """
 Nuisance and exploitability, read off a sweep of presentation conditions. [CPU]
 
-Lives in scripts/ rather than stage 4 for one reason: the delta is a different
-delta. stage4_analyze compares a CORRUPTED variant against its CLEAN control.
-Here the image is fixed and the PACKAGING changes, so the pairing key is
-(judge, variant_id, scored_region_id) across presentations. Feeding these
-parquets to stage 4 would not just answer the wrong question -- delta_table
-does not group by `presentation`, so it would pool every condition's clean
-controls into one baseline and say nothing about it.
-
-Everything else is stage 4's vocabulary, imported rather than re-derived, so
-the tables read next to its output: the same tie rate, the same noise floor,
-the same |delta|.
-
-THE HEADLINE. A nuisance condition changes nothing that carries information
-about edit quality. If the score moves as much for a shuffled region list as
-it does for a genuinely damaged region, the per-region number is not measuring
-the region.
+Here the image is fixed and the packaging changes, so scores are paired on
+(judge, variant_id, scored_region_id) across presentations; stage 4, which
+pairs corrupted variants with clean controls, does not apply. A nuisance change
+carries no information about edit quality, so it is compared with what real
+damage to a region does.
 
 Usage:
     python -m scripts.nuisance_report --scores 'out/nuisance/scores_*.parquet'
@@ -43,12 +32,8 @@ BASE = "baseline"
 
 
 def paired(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """One row per (judge, variant, region); one column per presentation.
-
-    Aggregating over sample_idx first is defensive -- the greedy runs have a
-    single sample each, but a mean over one value is a no-op and a mean over
-    five is the right thing if someone runs a condition sampled.
-    """
+    """One row per (judge, variant, region); one column per presentation
+    (mean over samples)."""
     a = (df.groupby(["judge", "variant_id", "scored_region_id", "presentation"])
          [col].mean().reset_index())
     return a.pivot_table(index=["judge", "variant_id", "scored_region_id"],
@@ -57,16 +42,11 @@ def paired(df: pd.DataFrame, col: str) -> pd.DataFrame:
 
 def damage_reference(df: pd.DataFrame, col: str,
                      min_control: float = None) -> tuple:
-    """What REAL damage does, from the baseline condition alone.
+    """What real damage does to the damaged region, from baseline-condition
+    scores that include corrupted variants (the main run, via --damage-scores).
 
-    The pilot design is [none, blur, remove], so the baseline parquet already
-    holds clean controls and damaged variants -- the sweep is self-contained
-    and needs nothing from the main run. A controls-only sweep takes it from
-    the main run instead (--damage-scores).
-
-    `min_control` drops regions whose clean control already sits at or below
-    it, as stage 4's --min-control does: a region at 0 cannot drop, so it
-    dilutes the damage effect with guaranteed ties.
+    `min_control` drops regions whose clean score is at or below it, as stage
+    4's --min-control does.
     """
     b = df[df.presentation == BASE]
     if b.empty:
@@ -85,15 +65,11 @@ def damage_reference(df: pd.DataFrame, col: str,
 
 
 def rerun_floor(df: pd.DataFrame, col: str) -> tuple:
-    """What the judge does to a BYTE-IDENTICAL request: the greedy noise floor.
+    """Noise floor from byte-identical requests.
 
-    Under `baseline` a clean control's request does not depend on its target
-    (corruption `none` copies the edit; the prompt lists every region in
-    canonical order), so a base's 3-5 controls are the same request sent 3-5
-    times in one run. Greedy vLLM still disagrees with itself on them -- batch
-    composition flips argmax ties -- so |delta| between them is the floor, in
-    the same units as every nuisance |delta|. Returns (mean |delta|, share
-    unchanged, n pairs).
+    A photo's clean controls under `baseline` are the same request, yet greedy
+    vLLM sometimes scores them differently. Returns (mean |delta| between
+    them, share unchanged, number of pairs).
     """
     b = df[(df.presentation == BASE) & df.is_control]
     d = []
@@ -110,19 +86,12 @@ def nuisance_table(w: pd.DataFrame, damage: float, floor: float,
                    base_of: pd.Series = None,
                    min_control: float = None,
                    dmg: pd.DataFrame = None) -> pd.DataFrame:
-    """|delta| for each null change, against what real damage moved.
+    """|delta| for each nuisance change, against what real damage moved.
 
-    With `base_of` (variant_id -> base_id) it adds the per-photograph mean of
-    |delta| and its bootstrap CI over photographs, the same estimator pair as
-    every exploit interval.
-
-    By default every scored slot counts, background included (the pilot's
-    convention). `min_control` restricts to the population the floor-excluded
-    damage reference uses: foreground regions whose baseline score is above it.
-
-    With `dmg` (per damaged region: |delta| and base) it adds `ratio`, the
-    per-photograph mean |delta| over the per-photograph damage mean, with a CI
-    from `ratio_ci` -- the number the "N x damage" claim actually rests on."""
+    `base_of` (variant_id -> base_id) adds the per-photograph mean and its
+    bootstrap CI. `min_control` keeps foreground regions whose baseline score is
+    above it. `dmg` (per damaged region: |delta| and base) adds `ratio`, the
+    ratio of per-photograph means, with a CI from `ratio_ci`."""
     if min_control is not None:
         w = w[(w.index.get_level_values("scored_region_id") != BG)
               & (w[BASE] > min_control)]
@@ -157,18 +126,11 @@ def nuisance_table(w: pd.DataFrame, damage: float, floor: float,
 
 
 def slot_effect(df: pd.DataFrame, col: str, mode: str = "shuffle") -> pd.DataFrame:
-    """Under `shuffle`, does the score follow the region's POSITION in the list?
+    """Under `shuffle`, does the score depend on the region's list position?
 
-    This is the mechanism behind a nuisance effect, not just its size. A score
-    that tracks slot 0 rather than the region named in slot 0 is a per-region
-    reward in name only. Meaningful only for shuffle, where position varies
-    independently of region id; under every other condition the two are the
-    same column.
-
-    The raw per-slot mean is confounded: slots 3-4 exist only on 4-5 region
-    photographs. `within` removes that -- each (photo, region) is shown at
-    different slots across the photo's controls, so subtracting the region's own
-    mean over its slots leaves position alone. Its CI resamples photographs.
+    The raw per-slot mean is confounded (slots 3-4 exist only on photos with 4-5
+    regions); `within` subtracts each region's own mean over its slots, leaving
+    the position effect. Its CI resamples photographs.
     """
     d = df[(df.presentation == mode) & (df.scored_region_id != BG)]
     d = d[d.slot_idx >= 0].copy()
@@ -188,16 +150,12 @@ def slot_effect(df: pd.DataFrame, col: str, mode: str = "shuffle") -> pd.DataFra
 
 def identity_null(df: pd.DataFrame, col: str, mode: str = "shuffle",
                   min_control: float = None) -> pd.DataFrame:
-    """Shuffles that drew the identity permutation: a null inside the run.
+    """Shuffles that kept the original order, as a null inside the run.
 
-    ~1/n! of `shuffle` variants keep the canonical order, so their requests are
-    byte-identical to `baseline` -- yet they were judged in the shuffle run,
-    beside reordered neighbours. Their |delta| against baseline is therefore the
-    run-to-run noise in exactly the pairing the nuisance deltas use, and the
-    reordered variants are measured against it. Identity is read off the data:
-    every region sits at the same slot as under baseline. Background excluded.
-    The identity group is ~3-region photos (1/6 vs 1/24), so it is not a random
-    subset; treat it as a check, not a matched control.
+    Their requests are identical to `baseline`, so their |delta| is the
+    run-to-run noise in the same pairing the nuisance deltas use. They are
+    mostly 3-region photos, so this is a check, not a matched control.
+    Background excluded.
     """
     k = ["judge", "variant_id", "scored_region_id"]
     fg = df[df.scored_region_id != BG]
@@ -225,14 +183,7 @@ def identity_null(df: pd.DataFrame, col: str, mode: str = "shuffle",
 
 
 def cluster_mean(gain: pd.Series, base_id: pd.Series) -> float:
-    """The mean of per-photograph means -- the estimand `boot_ci` brackets.
-
-    A row-weighted mean is a DIFFERENT estimator, and pairing one with the
-    other's interval produced point estimates sitting on their own confidence
-    bound (worst case seen: -1.345 quoted against a CI centred on -2.258, a 68%
-    discrepancy). Point and interval must estimate the same thing, so both come
-    from here.
-    """
+    """Mean of per-photograph means: the quantity `boot_ci` brackets."""
     g = pd.DataFrame({"gain": gain.values, "base": base_id.values}).dropna()
     if g.empty:
         return float("nan")
@@ -241,20 +192,9 @@ def cluster_mean(gain: pd.Series, base_id: pd.Series) -> float:
 
 def boot_ci(gain: pd.Series, base_id: pd.Series, n_boot: int = 2000,
             seed: int = 0) -> tuple:
-    """95% CI for `cluster_mean`, resampling PHOTOGRAPHS, not regions.
-
-    Regions inside one photograph share an edit, an instruction and a scene, so
-    they are not independent draws; a CI over rows would be far too tight. The
-    honest sample size is the number of bases, which is why `exploit_split`
-    already reports `n_bases`.
-
-    Seeded and fixed at 0 so a committed CSV reproduces exactly. This is an
-    analysis seed and has nothing to do with the corruption seeds in schema.py.
-
-    NOT multiplicity-corrected. A full run emits 30 of these per judge, so
-    "this one interval excludes zero" is weak evidence on its own -- see the
-    family-size warning in main().
-    """
+    """95% CI for `cluster_mean`, resampling photographs (regions within a
+    photo are not independent). Fixed seed; not corrected for multiple
+    comparisons."""
     g = pd.DataFrame({"gain": gain.values, "base": base_id.values}).dropna()
     if g.empty:
         return float("nan"), float("nan")
@@ -270,8 +210,7 @@ def boot_ci(gain: pd.Series, base_id: pd.Series, n_boot: int = 2000,
 def ratio_ci(num: pd.Series, num_base: pd.Series, den: pd.Series,
              den_base: pd.Series, n_boot: int = 2000, seed: int = 0) -> tuple:
     """Ratio of two per-photograph means, with a 95% CI that resamples the
-    photographs both sides share -- numerator and denominator move together,
-    so the denominator's own uncertainty is in the interval."""
+    photographs both share, so both sides' uncertainty is included."""
     a = pd.DataFrame({"v": num.values, "b": num_base.values}).dropna()
     c = pd.DataFrame({"v": den.values, "b": den_base.values}).dropna()
     a, c = a.groupby("b").v.mean(), c.groupby("b").v.mean()
@@ -287,20 +226,13 @@ def ratio_ci(num: pd.Series, num_base: pd.Series, den: pd.Series,
 
 
 def reversion(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
-    """Does the condition shrink every score toward the judge's grand mean?
+    """Does the condition pull every score toward one value?
 
-    This is the control the failed/ok split needs and did not have. Splitting on
-    the judge's OWN baseline and then measuring change from that same baseline
-    is circular: any condition that reverts toward a central value produces a
-    positive gain on the low tail and a negative one on the high tail, with no
-    exploit involved.
-
-    `slope` regresses the gain on the baseline score. A slope near -1 means the
-    condition simply replaces the score with a constant (that is `noimg`); a
-    slope near 0 means the condition moves scores independently of where they
-    started, which is what a genuine exploit would look like. `resid_failed` and
-    `resid_ok` re-run the split on the residual after removing one linear term:
-    if those collapse to zero, the split carried nothing the slope did not.
+    Selecting failed edits on the judge's own baseline and measuring change from
+    that baseline favours gains on low scores even without an exploit. `slope`
+    regresses the gain on the baseline score (-1: the condition replaces the
+    score with a constant). `resid_failed` / `resid_ok` repeat the split after
+    removing that linear term.
     """
     succ = paired(usable(df, "sc_success"), "sc_success")
     if BASE not in succ.columns:
@@ -335,18 +267,10 @@ def reversion(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
 
 
 def local_contrast(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
-    """Within each variant, does the TARGET region gain more than its neighbours?
+    """Within each variant, does the target region gain more than the others?
 
-    Paired inside the variant, because that is how the design is built --
-    comparing two marginal confidence intervals is not a test of their
-    difference and can hide or invent one.
-
-    Read `enhance` as the built-in negative control: it lifts the whole frame
-    uniformly, so it CANNOT flatter one region, and whatever contrast it
-    produces is the floor for this statistic. If `enhance_target` does not beat
-    that floor, there is no local flattery to report -- and if `enhance` itself
-    clears zero, the contrast is measuring something about target regions rather
-    than about the lift.
+    `enhance` lifts the whole frame, so it cannot favour one region; its
+    contrast is the baseline that `enhance_target` must exceed.
     """
     v = df.drop_duplicates("variant_id").set_index("variant_id")
     rows = []
@@ -378,15 +302,10 @@ def local_contrast(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
 
 
 def pq_by_presentation(df: pd.DataFrame) -> pd.DataFrame:
-    """What each presentation does to the two IMAGE-level quality scores.
+    """Change in the two image-level quality scores under each presentation.
 
-    Eq. (3) multiplies every region's phi by AES = min(PQ), so this is the
-    channel a cosmetic lift would have to exploit. PQ is one value per image,
-    not per region, hence `first()` per (variant, presentation).
-
-    Read `pq_artifacts` and `pq_naturalness` separately: AES is their MINIMUM,
-    so whichever is lower is the one that actually sets the reward, and a lift
-    that raises one while lowering the other has not helped.
+    AES = min(PQ) multiplies every region's reward, so this is how a cosmetic
+    change would raise it.
     """
     d = df[df.parsed].copy()
     pq = (d.groupby(["judge", "variant_id", "presentation"])
@@ -412,16 +331,8 @@ def pq_by_presentation(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def exploit_table(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
-    """Can the score be pushed UP without the image getting better?
-
-    `reward` and `phi` are reported side by side because Equation (3) is
-    sqrt(phi * AES)/C with AES = min(PQ) a single image-level term. A global
-    cosmetic lift can raise AES -- and therefore every region's reward -- with
-    no edit improved. It may at the same time LOWER phi, because sharpening the
-    edit makes it differ more from the source and the prompt asks about
-    preservation. Those two moving in opposite directions is a result, not a
-    contradiction; a single collapsed number would hide it.
-    """
+    """Mean gain over baseline under each exploit condition, for `reward` and
+    `phi` (which can move in opposite directions)."""
     v = df.drop_duplicates("variant_id").set_index("variant_id")
     rows = []
     for mode in EXPLOIT_AXES:
@@ -446,22 +357,9 @@ def exploit_table(df: pd.DataFrame, w_by_col: dict) -> pd.DataFrame:
 
 def exploit_split(df: pd.DataFrame, w_by_col: dict,
                   failed_below: float) -> pd.DataFrame:
-    """The exploit gain, split by WHERE the region is and whether its edit FAILED.
-
-    Clean controls only: the scenario is an edit that already went wrong (the
-    car came out blue, not red) with no corruption added, and the question is
-    whether a change that fixes nothing raises that region's score. "Failed" is
-    the judge's own baseline `sc_success` below `failed_below` -- not circular
-    here, because a policy trained on this reward climbs the judge's number,
-    not the truth.
-
-    `where` separates the two exploit mechanisms. Under `enhance` (global) the
-    target is just a designated region and target == other is expected. Under
-    `enhance_target`, a target gain above other's on `phi` means the judge can
-    be flattered locally; equal gains mean the lift acts through the whole
-    image. `n_bases` is the effective sample -- regions within one photograph
-    are not independent.
-    """
+    """Exploit gain on clean edits, split by target vs other region and by
+    whether the judge called the edit failed (baseline sc_success below
+    `failed_below`)."""
     succ = paired(usable(df, "sc_success"), "sc_success")
     if BASE not in succ.columns:
         return pd.DataFrame()
@@ -495,19 +393,13 @@ def exploit_split(df: pd.DataFrame, w_by_col: dict,
 
 
 def exploit_figure(split: pd.DataFrame, path: Path, col: str = "reward") -> bool:
-    """One bar per (presentation, failed/ok), with the bootstrap CI as the bar.
-
-    The failed-vs-ok split is the whole exploitability story, so it is the whole
-    figure. A CI that straddles zero is the visual form of "this axis does
-    nothing", which is the finding for both cosmetic axes and needs to be as
-    legible as the one axis that works.
-    """
+    """Bar chart of the target-region gain per presentation, failed vs ok
+    edits, with bootstrap CIs."""
     import matplotlib
     matplotlib.use("Agg")                      # no display on any of our boxes
     import matplotlib.pyplot as plt
 
-    # split["where"], never split.where -- `.where` is a DataFrame METHOD, so
-    # attribute access returns the method and the comparison is silently False.
+    # split["where"]: `.where` is a DataFrame method.
     d = split[(split.readout == col) & (split["where"] == "target")]
     if d.empty:
         return False
@@ -535,11 +427,7 @@ def exploit_figure(split: pd.DataFrame, path: Path, col: str = "reward") -> bool
 
 
 def coverage(df: pd.DataFrame) -> pd.DataFrame:
-    """Did the judge answer at all, per condition.
-
-    Carries the noimg exploit's headline directly: a full, schema-valid,
-    every-region-scored response to a request containing no image.
-    """
+    """Parse rate and share of scored regions, per condition."""
     fg = df[df.scored_region_id != BG]
     return (fg.groupby("presentation")
             .agg(rows=("parsed", "size"), parse_rate=("parsed", "mean"),
@@ -552,11 +440,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scores", default="out/nuisance/scores_*.parquet",
                     help="the greedy presentation conditions, one file each")
-    # A separate argument, not a filter over --scores. The floor run also
-    # carries presentation == "baseline", so it is indistinguishable from the
-    # greedy baseline by any column: same variants, same regions, same label.
-    # Globbed together they would average silently. Two globs, two files, no
-    # detection logic to get wrong.
+    # A separate glob: a sampled baseline run is indistinguishable from the
+    # greedy baseline by its columns.
     ap.add_argument("--sampled", default="out/nuisance/floor_*.parquet",
                     help="the n>1 baseline run that supplies the noise floor. "
                          "Without it the floor comes from identical greedy "
@@ -613,9 +498,7 @@ def main() -> int:
         print(f"  + {len(sampled)} rows from the sampled floor run "
               f"({int(sampled.sample_idx.max()) + 1} samples/request)")
 
-    # The denominator. A sampled run gives it directly; without one, fall back
-    # on identical baseline requests, which greedy vLLM does not score
-    # identically (see rerun_floor).
+    # Noise floor: from a sampled run if given, else from identical requests.
     floor = float("nan")
     if len(sampled):
         nf = noise_floor(usable(sampled, a.col), a.col)
@@ -686,8 +569,6 @@ def main() -> int:
     if len(ex):
         print(ex.round(4).to_string(index=False))
         ex.to_csv(out / "exploitability.csv", index=False)
-        # A CI straddling zero is the difference between "no effect" and
-        # "underpowered", and the two look identical in a mean alone.
         for r in ex[ex.readout == "reward"].itertuples():
             real = not (r.ci_lo <= 0 <= r.ci_hi)
             if real and r.mean_gain > 0:

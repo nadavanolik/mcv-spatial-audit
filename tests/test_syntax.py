@@ -1,18 +1,8 @@
 """
-Every module parses, and the CPU-only ones import. Runs anywhere, in a second.
+Every module parses, and the CPU-only ones import.
 
-This exists because a broken module reached a commit three times in one
-session, each time from the same cause: multi-line Python written through a
-shell heredoc, where an escaped \\n inside a string became a real newline and
-split an f-string across two lines. It parses fine in the patch script and
-dies on the VM after a `git pull` -- which is the worst possible place to find
-it, because the GPU stages cannot be run here at all.
-
-Import is checked separately from parsing, and only for modules that have no
-GPU dependency: `stage1_edit` and `stage3_judge` are parsed but not imported,
-since importing them on the laptop is meaningless (their torch/vllm imports are
-deliberately deferred into functions, so a bad import would not show up here
-anyway).
+`stage1_edit` and `stage3_judge` are parsed but not imported, since their GPU
+imports are deferred into functions.
 
 Run:  ./.venv/Scripts/python.exe tests/test_syntax.py
 """

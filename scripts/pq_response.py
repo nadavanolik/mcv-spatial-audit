@@ -1,38 +1,16 @@
 """
-PQ response -- does the IMAGE-LEVEL quality term react to per-region corruption?
+Does the image-level quality score react to corrupting one region? [CPU]
 
-The reward is sqrt(phi_r * AES)/C (Equation 3), where phi_r = min(success,
-preserve) is per-region but AES = min(PQ) is a SINGLE image-level term shared by
-every region of an image. stage 4 asks whether the per-region part localises the
-damage. This asks the complementary question about the global part: when we
-corrupt one region, does the image-level PQ move at all, and does it move more
-for stronger damage?
-
-It is the check that decides how to read a flat localization result:
-
-  PQ does NOT move  -> "the score ignored the damage" is ambiguous with "the
-                       judge could not SEE it" (region ~4.5% of the image, and
-                       max_pixels is capped, so fine texture may be lost).
-  PQ DOES move,     -> the judge perceives the corruption but books it globally;
-  monotone in sev      the damage information exists and simply never reaches a
-                       per-region score. That is the sharper finding, and it is
-                       what the main run shows.
-
-So this table is read BESIDE stage 4's localization tables, never instead of
-them: stage 4 says the per-region scores do not localise; this says that is not
-because the judge is blind.
-
-PQ is image-level, hence constant across a variant's region rows, so we collapse
-to one row per variant before differencing each corrupted variant against the
-mean PQ of its base's clean (corruption == none) controls. AES = min(PQ) matches
-the reward's own aggregation.
-
-CPU only; reads the same scores parquet stage 4 reads.
+AES = min(PQ) is one value per image. For each corrupted variant, the change in
+PQ against the mean of its photo's clean controls, by corruption and severity.
+If AES drops while the per-region scores do not localise the damage, the judge
+perceives the damage but does not attribute it to a region. --gate checks that
+a judge reacts at all before its localization numbers are used.
 
 Usage:
     python -m scripts.pq_response \
-        --scores 'results/main_2026-09-18/scores_shard*.parquet' \
-        --out results/main_2026-09-18/pq_response.csv
+        --scores 'results/main8b_2026-10-22/main_qwen_norm/scores_shard*.parquet' \
+        --out out/pq_response.csv --gate
 """
 from __future__ import annotations
 
@@ -51,13 +29,10 @@ from src.stage4_analyze import (_ci, _photo_boot_idx,  # noqa: E402
 
 PQ_COLS = ["pq_naturalness", "pq_artifacts"]
 
-# THE PERCEPTION GATE, fixed 2026-10-22 BEFORE any second-judge data at 8B was
-# seen. A judge passes when its image-level AES falls by at least GATE_DAES
-# points (0-25 scale) under BOTH the strongest graded corruption (noise s3) and
-# object removal, with the photo-bootstrap interval excluding zero. Reference
-# points: Qwen3-VL-8B -2.68 / -2.50, InternVL3-2B -0.11 / -0.04. A judge that
-# fails cannot inform on attribution: its localization AUROC measures the
-# instrument, not the protocol, and is not reported as a result.
+# Perception gate, set before the InternVL3-8B results were seen. A judge passes
+# when its AES falls by at least GATE_DAES points (0-25) under both strong noise
+# and removal, with the photo-bootstrap interval excluding zero. A judge that
+# fails does not react to the damage, so its localization numbers are not used.
 GATE_DAES = -1.0
 GATE_CELLS = [("noise", "3"), ("remove", "binary")]
 

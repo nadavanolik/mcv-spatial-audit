@@ -1,5 +1,7 @@
-"""Expand data/bases/bases.json into the full manifest. Run once, commit the
-resulting parquet hash to the repo so all five VMs provably share one design."""
+"""Expand data/bases/bases.json into the manifest for one config profile.
+
+Prints the manifest's hash, which must match on every machine that judges a
+shard."""
 from __future__ import annotations
 
 import argparse, hashlib, json

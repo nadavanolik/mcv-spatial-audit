@@ -1,17 +1,11 @@
 """
-Stage 0 selection logic, driven by a stub COCO. Laptop-runnable.
+Stage 0 selection logic, driven by a stub COCO (no pycocotools needed).
 
-`src.stage0_coco.select` is duck-typed against the six methods in `CocoLike`
-rather than importing pycocotools, which only stage 0 needs. That makes the
-part of stage 0 with the real risk in it testable anywhere.
+Covers the area band, the distinct-category rule, the region-count window,
+instruction/region alignment and writing a base directory. pycocotools' own
+calls (`annToMask`, `getAnnIds`) need the real library and annotations:
 
-What is checked here is OUR logic: the area band, the distinct-category rule,
-the region-count window, instruction/region alignment, and end-to-end writing
-of a base directory. What is NOT checked is whether pycocotools' own API calls
-(`annToMask`, `getAnnIds(iscrowd=...)`) behave as assumed - that needs the real
-library and the real annotations file:
-
-    python -m src.stage0_coco --coco .../instances_val2017.json --survey
+    python -m src.stage0_coco --coco .../instances_train2017.json --survey
 
 Run:  ./.venv/Scripts/python.exe tests/test_stage0.py
 """
@@ -344,9 +338,6 @@ def main() -> int:
                 n_removals(got[3]) == 1,
                 f"{[i for _, _, _, i in got[3]]}")
 
-    # The old code drew the instruction twice - once to test for None in
-    # select(), once for real in write_base() - so the string written could
-    # name a different colour than the one that passed the filter.
     a = list(S.select(coco, CFG, random.Random(7)))
     b = list(S.select(coco, CFG, random.Random(7)))
     ok &= check("selection is deterministic given a seed",

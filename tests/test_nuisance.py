@@ -1,13 +1,12 @@
-"""Guard the nuisance and exploitability presentation axes.
+"""
+Presentation variants, the nuisance/exploitability analysis, and judge agreement.
 
-These axes are unusually easy to get silently wrong. A permutation that never
-permutes, a subset that quietly drops the region we damaged, or a prompt order
-shuffled while the grammar still pins the answers to the canonical order -- all
-three produce a full parquet of plausible scores and a "no effect" conclusion
-that is really a bug. Nothing downstream would reveal any of them.
+Checks that each presentation changes what it should (a shuffle reorders the
+prompt and the schema together, a subset never drops the target) and that the
+analyses recover known effects from synthetic judges.
 
-Also builds a synthetic 2-base fixture, which is what makes
-`stage3_judge --dry-run` runnable on a laptop with no stage-1 output.
+Also builds a synthetic 2-base fixture, which lets `stage3_judge --dry-run` run
+without stage-1 output.
 
 Run:  ./.venv/Scripts/python.exe tests/test_nuisance.py
 """

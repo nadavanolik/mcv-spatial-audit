@@ -3,7 +3,7 @@
 __pycache__/
 *.pyc
 
-# Never commit: bulk artefacts and secrets (CLAUDE.md guardrails)
+# Never commit: bulk artefacts and secrets
 data/
 out/
 *.parquet

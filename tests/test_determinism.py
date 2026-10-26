@@ -1,5 +1,5 @@
-"""Guard the property the whole multi-VM plan rests on: identical inputs must
-produce byte-identical corrupted variants, on any machine, in any order."""
+"""Identical inputs must produce byte-identical corrupted variants, on any
+machine and in any order."""
 import hashlib
 import sys
 from pathlib import Path

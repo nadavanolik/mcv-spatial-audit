@@ -1,30 +1,18 @@
 """
-Two runs of the SAME judge on the same manifest: how different are they?  [CPU]
+Compare two runs of the same judge on the same manifest. [CPU]
 
-Used twice for results/main8b_2026-10-22/:
-
-  rerun     committed run vs the same protocol re-run. Expected to sit at the
-            greedy noise floor (identical requests disagree 6-11% of the time
-            on `reward` even on one VM); if it does not, the re-run numbers are
-            not comparable with the committed ones.
-  frame     pixel vs norm1000 boxes. The effect of telling the judge where the
-            regions are in the frame it grounds in.
-
-Two parts:
-
-  paired.csv    per (variant, region) pair present in both runs: share
-                identical, mean |difference|, correlation -- on clean controls
-                and on corrupted variants separately, for `reward` and `phi`.
-  headline.csv  the stage-4 headline computed on each run (floor-excluded with
-                --min-control): pooled AUROC, tie rates, coherence against the
-                permutation null, delta redundancy. With a photo-bootstrap
-                interval on the AUROC difference b - a.
+  paired.csv    per (variant, region) present in both runs: share identical,
+                mean |difference| and correlation, for clean and corrupted
+                variants, on `reward` and `phi`.
+  headline.csv  stage 4's headline numbers on each run (AUROC, tie rates,
+                coherence, delta redundancy), with a photo-bootstrap interval
+                on the AUROC difference b - a.
 
 Usage:
-    python -m scripts.compare_runs \\
-        --a 'results/main_2026-09-18/scores_shard*.parquet' --a-name committed \\
-        --b 'results/main8b_2026-10-22/main_qwen_pixel/scores_shard*.parquet' \\
-        --b-name rerun --min-control 0 --out out/analysis/compare_rerun
+    python -m scripts.compare_runs \
+        --a 'results/main8b_2026-10-22/main_qwen_pixel/scores_shard*.parquet' --a-name pixel \
+        --b 'results/main8b_2026-10-22/main_qwen_norm/scores_shard*.parquet' --b-name norm1000 \
+        --min-control 0 --out out/compare_frame
 """
 from __future__ import annotations
 

@@ -17,8 +17,8 @@ guaranteed tie. The headline numbers exclude them:
 
 ```bash
 python -m src.stage4_analyze \
-    --scores 'results/main_2026-09-18/scores_shard*.parquet' \
-    --out results/main_2026-09-18/floor_excluded \
+    --scores 'results/archive/main_2026-09-18/scores_shard*.parquet' \
+    --out results/archive/main_2026-09-18/floor_excluded \
     --all-readouts --min-control 0
 ```
 
@@ -33,7 +33,7 @@ and sensitivity tables:
 
 ```bash
 python -m src.stage4_analyze \
-    --scores 'results/main_2026-09-18/scores_shard*.parquet' \
+    --scores 'results/archive/main_2026-09-18/scores_shard*.parquet' \
     --out out/_phi_tmp --col phi --all-readouts --min-control 0
 # floor_excluded/coherence_phi.csv, sensitivity_phi.csv are copies of
 # out/_phi_tmp/{coherence,sensitivity}.csv
@@ -43,8 +43,8 @@ python -m src.stage4_analyze \
 
 ```bash
 python -m scripts.pq_response \
-    --scores 'results/main_2026-09-18/scores_shard*.parquet' \
-    --out results/main_2026-09-18/pq_response.csv
+    --scores 'results/archive/main_2026-09-18/scores_shard*.parquet' \
+    --out results/archive/main_2026-09-18/pq_response.csv
 ```
 
 ## The all-region view (for comparison, includes floored regions)
@@ -54,7 +54,7 @@ all-region analysis, drift-robustness split included:
 
 ```bash
 python -m src.stage4_analyze \
-    --scores 'results/main_2026-09-18/scores_shard*.parquet' \
+    --scores 'results/archive/main_2026-09-18/scores_shard*.parquet' \
     --out out/analysis --all-readouts --drift-csv data/bases/edit_drift.csv
 ```
 

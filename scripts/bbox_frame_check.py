@@ -1,33 +1,23 @@
 """
-Which coordinate frame did the judge read our region boxes in?  [CPU]
+In which coordinate frame did the judge read the region boxes? [CPU]
 
-Stage 3 writes each region's bbox_2d into the SC prompt, and A.4.3's output
-format asks the judge to echo bbox_2d back. Qwen3-VL and InternVL3 ground in a
-relative 0-1000 frame. Every run before 2026-10-22 sent SOURCE PIXELS. If the
-judge reads a pixel box as 0-1000, on a 640x480 photo every box shrinks toward
-the top-left corner and it scores a region we never pointed at -- which would
-manufacture a localization null all by itself.
+The prompt's output format asks the judge to echo each region's bbox_2d.
+Qwen3-VL and InternVL3 ground boxes in a 0-1000 frame; if they read pixel boxes
+in that frame, they look at the wrong part of the image. For each echoed box,
+against the true region box:
 
-The echo is the judge's own statement of where it thinks each region is, in
-its output frame. For each echoed box E, against the true region box:
+  iou_norm   echo vs the true box in 0-1000: the judge located the region.
+  iou_pixel  echo vs the pixel numbers read as 0-1000: it copied the numbers
+             and looked elsewhere.
+  copy       the echo equals the box that was sent.
 
-  iou_norm   E vs the true box in 0-1000. High = the judge located the region
-             where it actually is (it understood our frame, whichever we sent).
-  iou_pixel  E vs the true box in pixels, i.e. the pixel numbers taken as
-             0-1000. High while pixels were sent = it copied our numbers into
-             its frame: it believes the region is somewhere else.
-  copy       E equals the box we sent, exactly.
-
-Only photos where the two readings differ (IoU between them < 0.5) can tell
-the hypotheses apart; the summary reports that subset separately.
-
-The decisive test is still the frame comparison run (main_qwen_pixel vs
-main_qwen_norm): this reads what the judge SAYS, that measures what it does.
+Only photos where the two readings differ (IoU < 0.5) separate the cases; the
+summary reports them separately.
 
 Usage:
-    python -m scripts.bbox_frame_check \\
-        --scores 'results/main_2026-09-18/scores_shard*.parquet' \\
-        --bases data/bases --out out/analysis/bbox_frame.csv
+    python -m scripts.bbox_frame_check \
+        --scores 'results/main8b_2026-10-22/main_qwen_pixel/scores_shard*.parquet' \
+        --bases data/bases --out out/bbox_frame.csv
 """
 from __future__ import annotations
 

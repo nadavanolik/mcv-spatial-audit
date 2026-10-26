@@ -161,7 +161,7 @@ def main() -> None:
     nums.to_csv(args.out / "fig_perception_localization.csv", index=False)
     print(nums.round(3).to_string(index=False))
     for p in sorted(args.out.glob("fig_perception_localization.*")):
-        print(f"wrote {p.relative_to(ROOT)}")
+        print(f"wrote {p}")
 
 
 if __name__ == "__main__":

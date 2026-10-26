@@ -8,21 +8,20 @@ only: the `nuisance150` manifest (476 clean controls, `sha256[:16] =
 8f5c7b61541fda69`), greedy, one VM, three presentations: `shuffle`, `subset`,
 `box`.
 
-This supersedes `results/nuisance_pilot_2026-09-15/` for the nuisance axes
+This supersedes `results/archive/nuisance_pilot_2026-09-15/` for the nuisance axes
 (5 photographs there, 150 here).
 
 Two inputs come from earlier runs, deliberately:
 
 - **`scores_{qwen,internvl}_baseline.parquet` are byte copies** of the same
-  files in `results/exploit_150_2026-09-29/` (same VM, same manifest, same
+  files in `results/archive/exploit_150_2026-09-29/` (same VM, same manifest, same
   `src/`). Every nuisance delta pairs against its judge's copy.
-- **The damage reference comes from `results/main_2026-09-18/`** (Qwen) and
-  `results/internvl3_2b_2026-09-26/` (InternVL), which judged the same 150
+- **The damage reference comes from `results/archive/main_2026-09-18/`** (Qwen) and
+  `results/archive/internvl3_2b_2026-09-26/` (InternVL), which judged the same 150
   photographs, same controls, same model. A nuisance delta needs
   only clean controls; only its denominator needs damaged images, and `main`
   already measured that. Run-to-run noise does not distort the pairing: identical
-  requests disagree as often within one run as across runs and VMs (see
-  `docs/FINDINGS.md`).
+  requests disagree as often within one run as across runs and VMs.
 
 ## The run (needs a GPU VM)
 
@@ -46,27 +45,27 @@ including engine start (`shuffle` slowest).
 
 ```bash
 python -m scripts.nuisance_report \
-    --scores 'results/nuisance_150_2026-10-14/scores_qwen_*.parquet' \
-    --damage-scores 'results/main_2026-09-18/scores_shard*.parquet' \
-    --out results/nuisance_150_2026-10-14
+    --scores 'results/archive/nuisance_150_2026-10-14/scores_qwen_*.parquet' \
+    --damage-scores 'results/archive/main_2026-09-18/scores_shard*.parquet' \
+    --out results/archive/nuisance_150_2026-10-14
 
 # the same on phi, the per-region term without the image-level AES factor
 python -m scripts.nuisance_report \
-    --scores 'results/nuisance_150_2026-10-14/scores_qwen_*.parquet' \
-    --damage-scores 'results/main_2026-09-18/scores_shard*.parquet' \
-    --col phi --out results/nuisance_150_2026-10-14/phi
+    --scores 'results/archive/nuisance_150_2026-10-14/scores_qwen_*.parquet' \
+    --damage-scores 'results/archive/main_2026-09-18/scores_shard*.parquet' \
+    --col phi --out results/archive/nuisance_150_2026-10-14/phi
 
 # the HEADLINE: floor-excluded, as the main run's numbers are (add --col phi
 # and /phi for the phi version)
 python -m scripts.nuisance_report \
-    --scores 'results/nuisance_150_2026-10-14/scores_qwen_*.parquet' \
-    --damage-scores 'results/main_2026-09-18/scores_shard*.parquet' \
-    --min-control 0 --out results/nuisance_150_2026-10-14/floor_excluded
+    --scores 'results/archive/nuisance_150_2026-10-14/scores_qwen_*.parquet' \
+    --damage-scores 'results/archive/main_2026-09-18/scores_shard*.parquet' \
+    --min-control 0 --out results/archive/nuisance_150_2026-10-14/floor_excluded
 ```
 
 InternVL, the same four commands with `scores_internvl_*`,
-`--damage-scores 'results/internvl3_2b_2026-09-26/scores_shard*.parquet'` and
-`--out results/nuisance_150_2026-10-14/internvl[/phi|/floor_excluded[/phi]]`.
+`--damage-scores 'results/archive/internvl3_2b_2026-09-26/scores_shard*.parquet'` and
+`--out results/archive/nuisance_150_2026-10-14/internvl[/phi|/floor_excluded[/phi]]`.
 Run each judge separately: the output tables carry no judge column. On the VM
 the InternVL run is the same loop with `--model OpenGVLab/InternVL3-2B
 --gpu-util 0.60` and `scores_internvl_$P.parquet`.

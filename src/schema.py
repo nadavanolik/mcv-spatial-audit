@@ -1,12 +1,8 @@
 """
-Manifest schema + deterministic identity.
+Manifest schema, variant ids, seeds and sharding.
 
-This module is the contract between all five stages. Freeze it early; every
-analysis in the report is a groupby over these columns.
-
-CRITICAL: variant_id and seed are pure functions of the design-matrix fields.
-That is what lets any VM regenerate any variant byte-identically without ever
-transferring the corrupted images.
+variant_id and seed are pure functions of the design-matrix fields, so any
+machine can regenerate any variant byte-identically.
 """
 from __future__ import annotations
 
